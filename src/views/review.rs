@@ -100,10 +100,14 @@ pub fn ReviewView() -> Element {
                     }
 
                     is_loading.set(true);
-                    status_message.set(Some(("正在匯入並透過 Ollama 辨識工單中，請稍候...".to_string(), false)));
+                    status_message.set(Some((
+                        "正在匯入並透過 Ollama 辨識工單中，請稍候...".to_string(),
+                        false,
+                    )));
                     match WatcherService::process_image_file(&db, &path, false).await {
                         Ok(_) => {
-                            status_message.set(Some(("工單圖片匯入並辨識完成！".to_string(), false)));
+                            status_message
+                                .set(Some(("工單圖片匯入並辨識完成！".to_string(), false)));
                             reload();
                             refresh_badges.trigger();
                         }
@@ -128,7 +132,10 @@ pub fn ReviewView() -> Element {
             if let Some(mut r) = list.get(idx).cloned() {
                 let parsed_no = crate::utils::normalize_receipt_no(&form_no());
                 if parsed_no.is_none() {
-                    status_message.set(Some(("工單號碼（NO.）不可為空，請輸入有效純數字工單號！".to_string(), true)));
+                    status_message.set(Some((
+                        "工單號碼（NO.）不可為空，請輸入有效純數字工單號！".to_string(),
+                        true,
+                    )));
                     return;
                 }
                 r.no = parsed_no;
@@ -143,7 +150,10 @@ pub fn ReviewView() -> Element {
                 spawn(async move {
                     match db.update_receipt(&r).await {
                         Ok(_) => {
-                            status_message.set(Some(("工單已確認並成功歸檔存入資料庫！".to_string(), false)));
+                            status_message.set(Some((
+                                "工單已確認並成功歸檔存入資料庫！".to_string(),
+                                false,
+                            )));
                             reload();
                             refresh_badges.trigger();
                         }
@@ -167,7 +177,7 @@ pub fn ReviewView() -> Element {
             if let Some(r) = list.get(idx) {
                 let id = r.id;
                 spawn(async move {
-                    if let Ok(_) = db.delete_receipt(id).await {
+                    if db.delete_receipt(id).await.is_ok() {
                         status_message.set(Some(("單據及圖片檔案已成功刪除。".to_string(), false)));
                         reload();
                         refresh_badges.trigger();
@@ -188,13 +198,22 @@ pub fn ReviewView() -> Element {
             if let Some(r) = list.get(idx).cloned() {
                 spawn(async move {
                     is_loading.set(true);
-                    status_message.set(Some(("正在重新呼叫 Ollama 模型進行視覺辨識...".to_string(), false)));
+                    status_message.set(Some((
+                        "正在重新呼叫 Ollama 模型進行視覺辨識...".to_string(),
+                        false,
+                    )));
 
                     let full_path = StorageService::resolve_image_path(&r.image_path);
                     if let Ok(bytes) = std::fs::read(&full_path) {
-                        let url = db.get_setting("ollama_url").await.unwrap_or(None)
+                        let url = db
+                            .get_setting("ollama_url")
+                            .await
+                            .unwrap_or(None)
                             .unwrap_or_else(|| "http://localhost:11434".to_string());
-                        let model = db.get_setting("ollama_model").await.unwrap_or(None)
+                        let model = db
+                            .get_setting("ollama_model")
+                            .await
+                            .unwrap_or(None)
                             .unwrap_or_else(|| "llama3.2-vision".to_string());
 
                         match OllamaService::extract_receipt(&url, &model, &bytes).await {

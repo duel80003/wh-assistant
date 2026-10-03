@@ -1,7 +1,7 @@
-use dioxus::prelude::*;
-use crate::Route;
 use crate::db::Database;
 use crate::services::ollama::OllamaService;
+use crate::Route;
+use dioxus::prelude::*;
 
 #[derive(Clone, Copy)]
 pub struct RefreshBadges(pub Signal<u64>);
@@ -42,7 +42,11 @@ pub fn AppShell() -> Element {
                 if let Ok(kpi) = db.get_overdue_kpi().await {
                     overdue_count.set(kpi.total_count);
                 }
-                let url = db.get_setting("ollama_url").await.unwrap_or(None).unwrap_or_else(|| "http://localhost:11434".to_string());
+                let url = db
+                    .get_setting("ollama_url")
+                    .await
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "http://localhost:11434".to_string());
                 let online = OllamaService::test_connection(&url).await.is_ok();
                 ollama_online.set(online);
             });
@@ -65,8 +69,12 @@ pub fn AppShell() -> Element {
                         overdue_count.set(kpi.total_count);
                     }
                     ticker += 1;
-                    if ticker % 3 == 0 {
-                        let url = db.get_setting("ollama_url").await.unwrap_or(None).unwrap_or_else(|| "http://localhost:11434".to_string());
+                    if ticker.is_multiple_of(3) {
+                        let url = db
+                            .get_setting("ollama_url")
+                            .await
+                            .unwrap_or(None)
+                            .unwrap_or_else(|| "http://localhost:11434".to_string());
                         let online = OllamaService::test_connection(&url).await.is_ok();
                         ollama_online.set(online);
                     }

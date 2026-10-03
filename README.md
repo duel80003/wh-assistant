@@ -20,6 +20,7 @@
 ## ✨ 核心特色與功能模組 (Features)
 
 ### 1. 📥 待審單據工作台 (`ReviewView`)
+
 * **多渠道單據匯入**：
   * **點擊選取**：支援檔案選擇對話框單張或多張匯入。
   * **滑鼠拖曳**：將照片直接拖放至視窗完成上傳。
@@ -35,6 +36,7 @@
   * 左側原圖檢視支援滾輪放大與平移，右側即時修改微調，按下【確認並入庫】完成存檔。
 
 ### 2. 📁 歷史單據資料庫 (`HistoryView`)
+
 * **完整單據檢視**：
   * 清晰呈現所有已確認單據的縮圖、工單編號、施工人員、施工日期、應收截止日、金額與收費狀態。
   * 點擊縮圖彈出 **Lightbox 燈箱大圖** 預覽。
@@ -51,6 +53,7 @@
   * 刪除前跳出確認對話框，針對「尚未收費」的工單給予強烈醒目警示，防止誤刪未收款憑據。
 
 ### 3. ⚠️ 逾期催收看板 (`OverdueView`)
+
 * **智慧列管逾期工單**：
   * 依據「施工日期 + 約定收費天數」計算得出之 `due_date`（應收截止日）。
   * 超過約定截止日且 `payment_status = 'unpaid'` 之單據自動進入催收看板。
@@ -65,6 +68,7 @@
   * 逾期未收款之工單受到系統嚴密保護，看板中禁止直接刪除，防止產生無頭呆帳。
 
 ### 4. ⚙️ 系統設定 (`SettingsView`)
+
 * **收費期限方案管理**：
   * 自由增修收費期限規則（例如：即期付款 0 天、月結 30 天、雙月結 60 天、季結 90 天等）。
   * 支援指定全系統預設收費方案。
@@ -108,16 +112,21 @@
 
 1. **Rust 工具鏈**：
    請安裝最新穩定版 Rust（建議 1.80+）：
+
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
+
 2. **Dioxus CLI**（建議）：
+
    ```bash
    cargo install dioxus-cli
    ```
+
 3. **Ollama（本機視覺 AI）**：
-   - 請至 [Ollama 官網](https://ollama.com/) 安裝 Ollama 服務。
-   - 下載視覺多模態模型（二擇一即可）：
+   * 請至 [Ollama 官網](https://ollama.com/) 安裝 Ollama 服務。
+   * 下載視覺多模態模型（二擇一即可）：
+
      ```bash
      # 推薦模型 1 (輕量快速，約 7.9GB)
      ollama pull llama3.2-vision
@@ -131,28 +140,35 @@
 ### 安裝與啟動 (Run & Develop)
 
 1. **複製專案庫**：
+
    ```bash
    git clone https://github.com/your-username/WHassistant.git
    cd WHassistant
    ```
 
 2. **開發模式啟動（支援熱重載）**：
+
    ```bash
    dx serve --platform desktop
    ```
+
    *或使用原生 Cargo 啟動*：
+
    ```bash
    cargo run
    ```
 
 3. **編譯 Production 發行版本**：
+
    ```bash
    cargo build --release
    ```
+
    編譯完成之執行檔位於 `target/release/w-hassistant`。
 
 4. **打包 macOS 桌面應用程式 (`.app` / `.dmg`)**：
    使用 Dioxus CLI 將應用程式連同專屬圖示（`assets/mac.icns`）打包為 macOS 原生 App Bundle：
+
    ```bash
    # 確保 Tailwind CSS 樣式最新
    npm run build:css
@@ -160,11 +176,15 @@
    # 執行 macOS 發行版打包
    dx bundle --platform macos --release
    ```
+
    * **本機快速測試與開啟**：
+
      ```bash
      open $(find target -name "WHassistant.app" -type d | head -n 1)
      ```
+
    * **製作 macOS `.dmg` 安裝磁碟映像檔 (選用)**：
+
      ```bash
      APP_PATH=$(find target -name "WHassistant.app" -type d | head -n 1)
      hdiutil create -volname "WHassistant" -srcfolder "$APP_PATH" -ov -format UDZO WHassistant-mac.dmg
@@ -175,6 +195,7 @@
 ### Tailwind CSS 樣式即時編譯 (選用)
 
 專案預設已將編譯後的 `assets/tailwind.css` 納入版控。若您需要修改 UI 樣式類別：
+
 ```bash
 # 啟動 Tailwind CLI 即時編譯監聽
 npx @tailwindcss/cli -i ./tailwind.css -o ./assets/tailwind.css --watch
@@ -185,21 +206,27 @@ npx @tailwindcss/cli -i ./tailwind.css -o ./assets/tailwind.css --watch
 ## 🧪 測試與開發工具 (Testing & Seeding Tools)
 
 ### 執行單元測試
+
 系統具備完整的自動化單元測試，涵蓋工單號正規化、民國日期解析、逾期天數計算、SQLite 唯一鍵防重、逾期狀態即時銷帳扣減與多條件複合查詢：
+
 ```bash
 cargo test
 ```
 
 ### 灌入擬真測試資料庫（Fake Data Seeder）
+
 若需要在本機快速建立超過 100 筆測試資料以驗證分頁、逾期催收看板與待審核列表：
+
 ```bash
 python3 scripts/seed_fake_data.py
 ```
+
 執行後將自動生成：
-- **115 筆已確認歷史單據**（涵蓋各收費狀態、施工人員與金額，驗證 12 頁分頁導航）。
-- **25 筆逾期未收工單**（總額逾 NT$ 80 萬，方便測試看板統計與批次銷帳）。
-- **10 筆待審與失敗單據**（方便測試左圖右表工作台與側邊欄徽章連動）。
-- 自動生成 `sample_work_order.png` 測試圖片，支援點擊縮圖開啟燈箱預覽。
+
+* **115 筆已確認歷史單據**（涵蓋各收費狀態、施工人員與金額，驗證 12 頁分頁導航）。
+* **25 筆逾期未收工單**（總額逾 NT$ 80 萬，方便測試看板統計與批次銷帳）。
+* **10 筆待審與失敗單據**（方便測試左圖右表工作台與側邊欄徽章連動）。
+* 自動生成 `sample_work_order.png` 測試圖片，支援點擊縮圖開啟燈箱預覽。
 
 ---
 
@@ -208,14 +235,18 @@ python3 scripts/seed_fake_data.py
 專案已內建完整的 GitHub Actions 自動化建置工作流程（[`.github/workflows/build.yml`](.github/workflows/build.yml)），支援在 GitHub 雲端環境自動編譯 macOS 與 Windows 11 桌面執行檔：
 
 ### 支援平台
+
 * **Windows 11 / 10 (x64)**：產出 `WHassistant-Windows-x64.zip`（包含 `WHassistant.exe` 與完整資源目錄）。
 
 ### 觸發時機
+
 1. **建立版本發布（Git Tag Release，主要觸發）**：只要推送 `v*` 標籤，系統將自動啟動建置，並於 GitHub Releases 頁面發布新版本與附加 Windows 安裝壓縮檔：
+
    ```bash
    git tag v0.1.0
    git push origin v0.1.0
    ```
+
 2. **手動觸發（Manual Trigger）**：前往 GitHub 儲存庫的 **Actions** 分頁，選取 `Build Desktop App (Windows)` 並點擊 **Run workflow**。
 
 ---

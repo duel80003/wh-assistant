@@ -1,7 +1,7 @@
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Pool, Sqlite};
 use anyhow::{Context, Result};
 use chrono::Local;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Pool, Sqlite};
 use std::str::FromStr;
 
 use crate::models::{OverdueKpi, PaymentTerm, ProcessedFile, Receipt, ReceiptFilter};
@@ -99,13 +99,12 @@ impl Database {
 
         // Automatic upgrade: If receipts table was created in an older version with `no TEXT`,
         // migrate it seamlessly to `no INTEGER`
-        let col_type: Option<(String,)> = sqlx::query_as(
-            "SELECT type FROM pragma_table_info('receipts') WHERE name = 'no'"
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .ok()
-        .flatten();
+        let col_type: Option<(String,)> =
+            sqlx::query_as("SELECT type FROM pragma_table_info('receipts') WHERE name = 'no'")
+                .fetch_optional(&self.pool)
+                .await
+                .ok()
+                .flatten();
 
         if let Some((t,)) = col_type {
             if t.to_uppercase() == "TEXT" {
@@ -297,7 +296,7 @@ impl Database {
             WHERE id = ?
             "#,
         )
-        .bind(&r.no)
+        .bind(r.no)
         .bind(&r.matainer)
         .bind(&norm_work_date)
         .bind(&norm_due_date)
@@ -439,12 +438,18 @@ impl Database {
         let where_clause = conditions.join(" AND ");
 
         let count_query = format!("SELECT COUNT(*) FROM receipts WHERE {}", where_clause);
-        let total: (i64,) = sqlx::query_as(&count_query)
-            .fetch_one(&self.pool)
-            .await?;
+        let total: (i64,) = sqlx::query_as(&count_query).fetch_one(&self.pool).await?;
 
-        let limit = if filter.page_size > 0 { filter.page_size } else { 10 };
-        let offset = if filter.page > 0 { (filter.page - 1) * limit } else { 0 };
+        let limit = if filter.page_size > 0 {
+            filter.page_size
+        } else {
+            10
+        };
+        let offset = if filter.page > 0 {
+            (filter.page - 1) * limit
+        } else {
+            0
+        };
 
         let data_query = format!(
             "SELECT * FROM receipts WHERE {} ORDER BY work_date DESC, id DESC LIMIT {} OFFSET {}",
@@ -564,7 +569,9 @@ impl Database {
     pub async fn insert_payment_term(&self, term: &PaymentTerm) -> Result<i64> {
         let now = Local::now().to_rfc3339();
         if term.is_default {
-            sqlx::query("UPDATE payment_terms SET is_default = 0").execute(&self.pool).await?;
+            sqlx::query("UPDATE payment_terms SET is_default = 0")
+                .execute(&self.pool)
+                .await?;
         }
         let id = sqlx::query(
             r#"
@@ -587,7 +594,9 @@ impl Database {
 
     pub async fn set_default_payment_term(&self, id: i64) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE payment_terms SET is_default = 0").execute(&mut *tx).await?;
+        sqlx::query("UPDATE payment_terms SET is_default = 0")
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("UPDATE payment_terms SET is_default = 1 WHERE id = ?")
             .bind(id)
             .execute(&mut *tx)
@@ -670,19 +679,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_database_init_and_seed() {
-        let db = Database::init().await.expect("Database initialization failed");
+        let db = Database::init()
+            .await
+            .expect("Database initialization failed");
         let terms = db.get_payment_terms().await.expect("Failed to get terms");
         assert!(!terms.is_empty(), "Default payment terms should be seeded");
-        
-        let retention = db.get_setting("retention_days").await.expect("Failed to get retention setting");
+
+        let retention = db
+            .get_setting("retention_days")
+            .await
+            .expect("Failed to get retention setting");
         assert!(retention.is_some(), "Retention setting should be seeded");
     }
 
     #[tokio::test]
     async fn test_roc_date_conversion_on_insert() {
-        let db = Database::init().await.expect("Database initialization failed");
-        sqlx::query("DELETE FROM receipts WHERE no = 99990001").execute(&db.pool).await.ok();
-        
+        let db = Database::init()
+            .await
+            .expect("Database initialization failed");
+        sqlx::query("DELETE FROM receipts WHERE no = 99990001")
+            .execute(&db.pool)
+            .await
+            .ok();
+
         let mut test_receipt = Receipt {
             id: 0,
             no: Some(99990001),
@@ -701,23 +720,48 @@ mod tests {
             updated_at: String::new(),
         };
 
-        let id = db.insert_receipt(&test_receipt).await.expect("Insert receipt failed");
+        let id = db
+            .insert_receipt(&test_receipt)
+            .await
+            .expect("Insert receipt failed");
         assert!(id > 0);
 
-        let retrieved = db.get_receipt_by_id(id).await.expect("Query failed").expect("Receipt not found");
+        let retrieved = db
+            .get_receipt_by_id(id)
+            .await
+            .expect("Query failed")
+            .expect("Receipt not found");
         assert_eq!(retrieved.no, Some(99990001));
-        assert_eq!(retrieved.work_date, "2024-05-20", "ROC work_date must be converted to Western YYYY-MM-DD");
-        assert_eq!(retrieved.due_date, "2024-06-19", "ROC due_date must be converted to Western YYYY-MM-DD");
+        assert_eq!(
+            retrieved.work_date, "2024-05-20",
+            "ROC work_date must be converted to Western YYYY-MM-DD"
+        );
+        assert_eq!(
+            retrieved.due_date, "2024-06-19",
+            "ROC due_date must be converted to Western YYYY-MM-DD"
+        );
 
         // Test update conversion as well
         test_receipt.id = id;
         test_receipt.work_date = "113-10-10".to_string();
         test_receipt.due_date = "113年11月10日".to_string();
-        db.update_receipt(&test_receipt).await.expect("Update failed");
+        db.update_receipt(&test_receipt)
+            .await
+            .expect("Update failed");
 
-        let updated = db.get_receipt_by_id(id).await.expect("Query failed").expect("Receipt not found");
-        assert_eq!(updated.work_date, "2024-10-10", "Updated ROC work_date must be converted to Western YYYY-MM-DD");
-        assert_eq!(updated.due_date, "2024-11-10", "Updated ROC due_date must be converted to Western YYYY-MM-DD");
+        let updated = db
+            .get_receipt_by_id(id)
+            .await
+            .expect("Query failed")
+            .expect("Receipt not found");
+        assert_eq!(
+            updated.work_date, "2024-10-10",
+            "Updated ROC work_date must be converted to Western YYYY-MM-DD"
+        );
+        assert_eq!(
+            updated.due_date, "2024-11-10",
+            "Updated ROC due_date must be converted to Western YYYY-MM-DD"
+        );
 
         // Clean up test row
         db.delete_receipt(id).await.ok();
@@ -725,8 +769,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_unique_receipt_no() {
-        let db = Database::init().await.expect("Database initialization failed");
-        sqlx::query("DELETE FROM receipts WHERE no = 88887777").execute(&db.pool).await.ok();
+        let db = Database::init()
+            .await
+            .expect("Database initialization failed");
+        sqlx::query("DELETE FROM receipts WHERE no = 88887777")
+            .execute(&db.pool)
+            .await
+            .ok();
 
         let unique_no = 88887777;
         let r1 = Receipt {
@@ -748,7 +797,10 @@ mod tests {
         };
 
         // First insert succeeds
-        let id1 = db.insert_receipt(&r1).await.expect("First insert should succeed");
+        let id1 = db
+            .insert_receipt(&r1)
+            .await
+            .expect("First insert should succeed");
 
         // Second insert with same `no` must fail
         let mut r2 = r1.clone();
@@ -762,9 +814,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_overdue_payment_status_update() {
-        let db = Database::init().await.expect("Database initialization failed");
+        let db = Database::init()
+            .await
+            .expect("Database initialization failed");
         let test_no = 99998888;
-        sqlx::query("DELETE FROM receipts WHERE no = ?").bind(test_no).execute(&db.pool).await.ok();
+        sqlx::query("DELETE FROM receipts WHERE no = ?")
+            .bind(test_no)
+            .execute(&db.pool)
+            .await
+            .ok();
 
         let initial_kpi = db.get_overdue_kpi().await.expect("Failed to get KPI");
 
@@ -786,20 +844,28 @@ mod tests {
             updated_at: String::new(),
         };
 
-        let id = db.insert_receipt(&overdue_receipt).await.expect("Insert failed");
+        let id = db
+            .insert_receipt(&overdue_receipt)
+            .await
+            .expect("Insert failed");
 
         let kpi_with_overdue = db.get_overdue_kpi().await.expect("Failed to get KPI");
         assert_eq!(kpi_with_overdue.total_count, initial_kpi.total_count + 1);
 
         // Mark as paid
-        db.set_payment_status(id, "paid").await.expect("Failed to set paid");
+        db.set_payment_status(id, "paid")
+            .await
+            .expect("Failed to set paid");
 
         // KPI must reflect decrease immediately
         let kpi_after_paid = db.get_overdue_kpi().await.expect("Failed to get KPI");
         assert_eq!(kpi_after_paid.total_count, initial_kpi.total_count);
 
         // Receipts list must not contain the paid receipt
-        let overdue_list = db.get_overdue_receipts().await.expect("Failed to get overdue list");
+        let overdue_list = db
+            .get_overdue_receipts()
+            .await
+            .expect("Failed to get overdue list");
         assert!(!overdue_list.iter().any(|r| r.id == id));
 
         // Clean up
@@ -808,9 +874,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_confirmed_receipts_filter() {
-        let db = Database::init().await.expect("Database initialization failed");
+        let db = Database::init()
+            .await
+            .expect("Database initialization failed");
         let test_no = 77776666;
-        sqlx::query("DELETE FROM receipts WHERE no = ?").bind(test_no).execute(&db.pool).await.ok();
+        sqlx::query("DELETE FROM receipts WHERE no = ?")
+            .bind(test_no)
+            .execute(&db.pool)
+            .await
+            .ok();
 
         let receipt = Receipt {
             id: 0,
@@ -841,7 +913,10 @@ mod tests {
             page: 1,
             page_size: 10,
         };
-        let (list_kw, total_kw) = db.get_confirmed_receipts(&filter_kw).await.expect("Query failed");
+        let (list_kw, total_kw) = db
+            .get_confirmed_receipts(&filter_kw)
+            .await
+            .expect("Query failed");
         assert_eq!(total_kw, 1);
         assert_eq!(list_kw[0].id, id);
 
@@ -854,7 +929,10 @@ mod tests {
             page: 1,
             page_size: 10,
         };
-        let (list_name, total_name) = db.get_confirmed_receipts(&filter_name).await.expect("Query failed");
+        let (list_name, total_name) = db
+            .get_confirmed_receipts(&filter_name)
+            .await
+            .expect("Query failed");
         assert_eq!(total_name, 1);
         assert_eq!(list_name[0].id, id);
 
@@ -867,7 +945,10 @@ mod tests {
             page: 1,
             page_size: 10,
         };
-        let (_, total_unpaid) = db.get_confirmed_receipts(&filter_unpaid).await.expect("Query failed");
+        let (_, total_unpaid) = db
+            .get_confirmed_receipts(&filter_unpaid)
+            .await
+            .expect("Query failed");
         assert_eq!(total_unpaid, 0);
 
         // 4. Filter by date range matching
@@ -879,7 +960,10 @@ mod tests {
             page: 1,
             page_size: 10,
         };
-        let (_, total_date_match) = db.get_confirmed_receipts(&filter_date_match).await.expect("Query failed");
+        let (_, total_date_match) = db
+            .get_confirmed_receipts(&filter_date_match)
+            .await
+            .expect("Query failed");
         assert_eq!(total_date_match, 1);
 
         // 5. Filter by date range outside
@@ -891,11 +975,13 @@ mod tests {
             page: 1,
             page_size: 10,
         };
-        let (_, total_date_outside) = db.get_confirmed_receipts(&filter_date_outside).await.expect("Query failed");
+        let (_, total_date_outside) = db
+            .get_confirmed_receipts(&filter_date_outside)
+            .await
+            .expect("Query failed");
         assert_eq!(total_date_outside, 0);
 
         // Clean up
         db.delete_receipt(id).await.ok();
     }
 }
-

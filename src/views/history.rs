@@ -6,6 +6,29 @@ use crate::services::storage::StorageService;
 use crate::utils::{calculate_due_date, normalize_work_date};
 use crate::views::layout::RefreshBadges;
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ReceiptEditForm {
+    pub no: String,
+    pub matainer: String,
+    pub work_date: String,
+    pub due_date: String,
+    pub total_amount: f64,
+    pub payment_term_id: Option<i64>,
+}
+
+impl ReceiptEditForm {
+    pub fn from_receipt(item: &Receipt) -> Self {
+        Self {
+            no: item.no.map(|n| n.to_string()).unwrap_or_default(),
+            matainer: item.matainer.clone().unwrap_or_default(),
+            work_date: item.work_date.clone(),
+            due_date: item.due_date.clone(),
+            total_amount: item.total_amount,
+            payment_term_id: item.payment_term_id,
+        }
+    }
+}
+
 #[component]
 pub fn HistoryView() -> Element {
     let db = use_context::<Database>();
@@ -23,12 +46,7 @@ pub fn HistoryView() -> Element {
 
     // Modal state for viewing/editing details
     let mut selected_receipt = use_signal(|| Option::<Receipt>::None);
-    let mut modal_no = use_signal(String::new);
-    let mut modal_matainer = use_signal(String::new);
-    let mut modal_work_date = use_signal(String::new);
-    let mut modal_due_date = use_signal(String::new);
-    let mut modal_total_amount = use_signal(|| 0.0f64);
-    let mut modal_term_id = use_signal(|| Option::<i64>::None);
+    let mut edit_form = use_signal(ReceiptEditForm::default);
     let mut payment_terms = use_signal(Vec::<PaymentTerm>::new);
 
     // Image preview modal (full view)
@@ -367,16 +385,7 @@ pub fn HistoryView() -> Element {
                                                     onclick: {
                                                         let item = receipt_for_modal.clone();
                                                         move |_| {
-                                                            form_no_setup(
-                                                                &item,
-                                                                &mut selected_receipt,
-                                                                &mut modal_no,
-                                                                &mut modal_matainer,
-                                                                &mut modal_work_date,
-                                                                &mut modal_due_date,
-                                                                &mut modal_total_amount,
-                                                                &mut modal_term_id,
-                                                            );
+                                                            form_no_setup(&item, &mut selected_receipt, &mut edit_form);
                                                         }
                                                     },
                                                     "✏️ 編輯"
@@ -461,8 +470,8 @@ pub fn HistoryView() -> Element {
                                 label { class: "text-xs font-medium text-slate-300", "工單號碼" }
                                 input {
                                     r#type: "text",
-                                    value: "{modal_no}",
-                                    oninput: move |e| modal_no.set(e.value()),
+                                    value: "{edit_form().no}",
+                                    oninput: move |e| edit_form.write().no = e.value(),
                                     class: "w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none font-mono"
                                 }
                             }
@@ -470,8 +479,8 @@ pub fn HistoryView() -> Element {
                                 label { class: "text-xs font-medium text-slate-300", "施工人員" }
                                 input {
                                     r#type: "text",
-                                    value: "{modal_matainer}",
-                                    oninput: move |e| modal_matainer.set(e.value()),
+                                    value: "{edit_form().matainer}",
+                                    oninput: move |e| edit_form.write().matainer = e.value(),
                                     class: "w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none"
                                 }
                             }
@@ -479,8 +488,8 @@ pub fn HistoryView() -> Element {
                                 label { class: "text-xs font-medium text-slate-300", "施工日期 (基準點)" }
                                 input {
                                     r#type: "text",
-                                    value: "{modal_work_date}",
-                                    oninput: move |e| modal_work_date.set(e.value()),
+                                    value: "{edit_form().work_date}",
+                                    oninput: move |e| edit_form.write().work_date = e.value(),
                                     class: "w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none font-mono"
                                 }
                             }
@@ -489,10 +498,10 @@ pub fn HistoryView() -> Element {
                                 input {
                                     r#type: "number",
                                     step: "any",
-                                    value: "{modal_total_amount}",
+                                    value: "{edit_form().total_amount}",
                                     oninput: move |e| {
                                         if let Ok(v) = e.value().parse::<f64>() {
-                                            modal_total_amount.set(v);
+                                            edit_form.write().total_amount = v;
                                         }
                                     },
                                     class: "w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none font-mono"
@@ -502,13 +511,13 @@ pub fn HistoryView() -> Element {
                                 label { class: "text-xs font-medium text-slate-300", "收費期限方案" }
                                 select {
                                     class: "w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none cursor-pointer",
-                                    value: modal_term_id().map(|id| id.to_string()).unwrap_or_default(),
+                                    value: edit_form().payment_term_id.map(|id| id.to_string()).unwrap_or_default(),
                                     onchange: move |e| {
                                         if let Ok(id) = e.value().parse::<i64>() {
-                                            modal_term_id.set(Some(id));
+                                            edit_form.write().payment_term_id = Some(id);
                                             if let Some(t) = payment_terms().iter().find(|t| t.id == id) {
-                                                let norm = normalize_work_date(&modal_work_date());
-                                                modal_due_date.set(calculate_due_date(&norm, t.duration_days));
+                                                let norm = normalize_work_date(&edit_form().work_date);
+                                                edit_form.write().due_date = calculate_due_date(&norm, t.duration_days);
                                             }
                                         }
                                     },
@@ -521,8 +530,8 @@ pub fn HistoryView() -> Element {
                                 label { class: "text-xs font-medium text-slate-300", "應收截止日" }
                                 input {
                                     r#type: "text",
-                                    value: "{modal_due_date}",
-                                    oninput: move |e| modal_due_date.set(e.value()),
+                                    value: "{edit_form().due_date}",
+                                    oninput: move |e| edit_form.write().due_date = e.value(),
                                     class: "w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none font-mono"
                                 }
                             }
@@ -551,19 +560,20 @@ pub fn HistoryView() -> Element {
                                     let fetch_data = fetch_data.clone();
                                     move |_| {
                                         let db = db.clone();
-                                        let parsed_no = crate::utils::normalize_receipt_no(&modal_no());
+                                        let form = edit_form();
+                                        let parsed_no = crate::utils::normalize_receipt_no(&form.no);
                                         let r_save = Receipt {
                                             id: r_id,
                                             no: parsed_no,
-                                            matainer: Some(modal_matainer().trim().to_string()).filter(|s| !s.is_empty()),
-                                            work_date: normalize_work_date(&modal_work_date()),
-                                            due_date: modal_due_date().trim().to_string(),
-                                            total_amount: modal_total_amount(),
+                                            matainer: Some(form.matainer.trim().to_string()).filter(|s| !s.is_empty()),
+                                            work_date: normalize_work_date(&form.work_date),
+                                            due_date: form.due_date.trim().to_string(),
+                                            total_amount: form.total_amount,
                                             currency: r_curr.clone(),
                                             image_path: r_img.clone(),
                                             status: r_st.clone(),
                                             payment_status: r_ps.clone(),
-                                            payment_term_id: modal_term_id(),
+                                            payment_term_id: form.payment_term_id,
                                             paid_at: r_pa.clone(),
                                             error_message: r_err.clone(),
                                             created_at: r_ca.clone(),
@@ -671,18 +681,8 @@ pub fn HistoryView() -> Element {
 fn form_no_setup(
     item: &Receipt,
     selected: &mut Signal<Option<Receipt>>,
-    no: &mut Signal<String>,
-    matainer: &mut Signal<String>,
-    work_date: &mut Signal<String>,
-    due_date: &mut Signal<String>,
-    total_amount: &mut Signal<f64>,
-    term_id: &mut Signal<Option<i64>>,
+    edit_form: &mut Signal<ReceiptEditForm>,
 ) {
     selected.set(Some(item.clone()));
-    no.set(item.no.map(|n| n.to_string()).unwrap_or_default());
-    matainer.set(item.matainer.clone().unwrap_or_default());
-    work_date.set(item.work_date.clone());
-    due_date.set(item.due_date.clone());
-    total_amount.set(item.total_amount);
-    term_id.set(item.payment_term_id);
+    edit_form.set(ReceiptEditForm::from_receipt(item));
 }

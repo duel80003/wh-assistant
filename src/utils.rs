@@ -8,7 +8,7 @@ pub fn normalize_work_date(input: &str) -> String {
     }
 
     // Try parsing standard YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
-    let clean = trimmed.replace('/', "-").replace('.', "-");
+    let clean = trimmed.replace(['/', '.'], "-");
     if let Ok(d) = NaiveDate::parse_from_str(&clean, "%Y-%m-%d") {
         if d.year() < 1900 {
             if let Some(d2) = NaiveDate::from_ymd_opt(d.year() + 1911, d.month(), d.day()) {
@@ -42,12 +42,15 @@ pub fn normalize_work_date(input: &str) -> String {
     // e.g. "民國113年5月20日", "113年05月20日", "113/5/20", "113-5-20"
     let roc_str = trimmed
         .replace("民國", "")
-        .replace('年', "-")
-        .replace('月', "-")
+        .replace(['年', '月'], "-")
         .replace('日', "")
         .replace('/', "-");
 
-    let parts: Vec<&str> = roc_str.split('-').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = roc_str
+        .split('-')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
     if parts.len() == 3 {
         if let (Ok(roc_year), Ok(month), Ok(day)) = (
             parts[0].parse::<i32>(),
