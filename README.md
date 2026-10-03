@@ -211,13 +211,12 @@ python3 scripts/seed_fake_data.py
 * **Windows 11 / 10 (x64)**：產出 `WHassistant-Windows-x64.zip`（包含 `WHassistant.exe` 與完整資源目錄）。
 
 ### 觸發時機
-1. **每次 Push 或 Pull Request 至 `main` 分支**：自動編譯 Windows 版本並將產物上傳至該次 GitHub Actions 執行的 Artifacts，供隨時下載測試。
-2. **手動觸發（Manual Trigger）**：前往 GitHub 儲存庫的 **Actions** 分頁，選取 `Build Desktop App (Windows)` 並點擊 **Run workflow**。
-3. **建立版本發布（Git Tag Release）**：只要推送 `v*` 標籤，系統將自動於 GitHub Releases 頁面發布新版本並附加 Windows 安裝壓縮檔：
+1. **建立版本發布（Git Tag Release，主要觸發）**：只要推送 `v*` 標籤，系統將自動啟動建置，並於 GitHub Releases 頁面發布新版本與附加 Windows 安裝壓縮檔：
    ```bash
    git tag v0.1.0
    git push origin v0.1.0
    ```
+2. **手動觸發（Manual Trigger）**：前往 GitHub 儲存庫的 **Actions** 分頁，選取 `Build Desktop App (Windows)` 並點擊 **Run workflow**。
 
 ---
 
