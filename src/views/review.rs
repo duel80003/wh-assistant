@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use std::path::PathBuf;
 
 use crate::db::Database;
 use crate::models::{PaymentTerm, Receipt};
@@ -15,6 +16,7 @@ pub fn ReviewView() -> Element {
     let mut payment_terms = use_signal(Vec::<PaymentTerm>::new);
     let mut is_loading = use_signal(|| false);
     let mut status_message = use_signal(|| Option::<(String, bool)>::None); // (message, is_error)
+    let mut duplicate_prompt = use_signal(|| Option::<PathBuf>::None);
 
     // Form editing state for current receipt
     let mut form_no = use_signal(String::new);
@@ -85,10 +87,19 @@ pub fn ReviewView() -> Element {
                     .pick_file()
                     .await
                 {
+                    let path = handle.path().to_path_buf();
+                    // Check if file hash has already been processed
+                    if let Ok(bytes) = std::fs::read(&path) {
+                        let hash = StorageService::compute_sha256(&bytes);
+                        if let Ok(true) = db.is_file_hash_processed(&hash).await {
+                            duplicate_prompt.set(Some(path));
+                            return;
+                        }
+                    }
+
                     is_loading.set(true);
                     status_message.set(Some(("正在匯入並透過 Ollama 辨識工單中，請稍候...".to_string(), false)));
-                    let path = handle.path();
-                    match WatcherService::process_image_file(&db, path).await {
+                    match WatcherService::process_image_file(&db, &path, false).await {
                         Ok(_) => {
                             status_message.set(Some(("工單圖片匯入並辨識完成！".to_string(), false)));
                             reload();
@@ -113,8 +124,8 @@ pub fn ReviewView() -> Element {
             let idx = current_idx();
             if let Some(mut r) = list.get(idx).cloned() {
                 let parsed_no = crate::utils::normalize_receipt_no(&form_no());
-                if !form_no().trim().is_empty() && parsed_no.is_none() {
-                    status_message.set(Some(("工單編號請輸入有效數字（例如 12345678）！".to_string(), true)));
+                if parsed_no.is_none() {
+                    status_message.set(Some(("工單號碼（NO.）不可為空，請輸入有效純數字工單號！".to_string(), true)));
                     return;
                 }
                 r.no = parsed_no;
@@ -511,6 +522,59 @@ pub fn ReviewView() -> Element {
                     h3 { class: "text-base font-bold text-slate-200", "目前沒有待確認的工單" }
                     p { class: "text-xs text-slate-400 max-w-md",
                         "您可以點選上方拖曳區域手動匯入新圖片，或前往【系統設定】開啟目錄自動監聽功能。"
+                    }
+                }
+            }
+
+            // Duplicate Photo Prompt Modal
+            if let Some(dup_path) = duplicate_prompt() {
+                div {
+                    class: "fixed inset-0 bg-black/80 backdrop-blur-xs z-50 flex items-center justify-center p-4",
+                    div {
+                        class: "bg-slate-900 border border-amber-500/40 rounded-xl p-6 max-w-md w-full shadow-2xl flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150",
+                        div { class: "flex items-center gap-3 text-amber-400 font-semibold text-base",
+                            span { class: "text-2xl", "⚠️" }
+                            span { "偵測到重複照片" }
+                        }
+                        p { class: "text-sm text-slate-300 leading-relaxed",
+                            "此工單照片先前已經上傳處理過並存在紀錄。請問是否仍要繼續進行辨識並建立工單？"
+                        }
+                        div { class: "flex justify-end gap-3 pt-3 border-t border-slate-800",
+                            button {
+                                class: "px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer",
+                                onclick: move |_| duplicate_prompt.set(None),
+                                "取消上傳"
+                            }
+                            button {
+                                class: "px-4 py-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg shadow transition-colors cursor-pointer",
+                                onclick: {
+                                    let db = db.clone();
+                                    let reload = reload_data.clone();
+                                    let path = dup_path.clone();
+                                    move |_| {
+                                        duplicate_prompt.set(None);
+                                        let db = db.clone();
+                                        let reload = reload.clone();
+                                        let path = path.clone();
+                                        spawn(async move {
+                                            is_loading.set(true);
+                                            status_message.set(Some(("正在強制匯入並透過 Ollama 辨識工單中，請稍候...".to_string(), false)));
+                                            match WatcherService::process_image_file(&db, &path, true).await {
+                                                Ok(_) => {
+                                                    status_message.set(Some(("工單圖片匯入並辨識完成！".to_string(), false)));
+                                                    reload();
+                                                }
+                                                Err(e) => {
+                                                    status_message.set(Some((format!("匯入失敗: {:#}", e), true)));
+                                                }
+                                            }
+                                            is_loading.set(false);
+                                        });
+                                    }
+                                },
+                                "仍要繼續處理"
+                            }
+                        }
                     }
                 }
             }

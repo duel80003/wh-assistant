@@ -27,54 +27,16 @@ impl WatcherService {
     }
 
     /// Process a single image file (shared between drag-and-drop / manual pick and directory watcher)
-    pub async fn process_image_file(db: &Database, file_path: &Path) -> Result<i64> {
+    pub async fn process_image_file(db: &Database, file_path: &Path, force: bool) -> Result<i64> {
         let (saved_filename, hash, size) = StorageService::copy_image_from_file(file_path)?;
 
-        // Deduplication check
-        if db.is_file_hash_processed(&hash).await? {
-            // Already processed previously, delete the copied image to avoid duplicate storage
+        // Deduplication check (skipped if user explicitly chose to force proceed)
+        if !force && db.is_file_hash_processed(&hash).await? {
             StorageService::delete_image_file(&saved_filename).ok();
             anyhow::bail!("此圖片先前已經處理過，已為您自動排重。");
         }
 
-        // Get default payment term for due date calculation
-        let default_term = db.get_default_payment_term().await?.unwrap_or_else(|| {
-            crate::models::PaymentTerm {
-                id: 1,
-                name: "月結 30 天".to_string(),
-                duration_code: "30d".to_string(),
-                duration_days: 30,
-                is_default: true,
-                description: None,
-                created_at: Local::now().to_rfc3339(),
-            }
-        });
-
-        let today = Local::now().format("%Y-%m-%d").to_string();
-        let initial_due = calculate_due_date(&today, default_term.duration_days);
-
-        // Insert initial receipt with 'processing' status
-        let initial_receipt = Receipt {
-            id: 0,
-            no: None,
-            matainer: None,
-            work_date: today.clone(),
-            due_date: initial_due.clone(),
-            total_amount: 0.0,
-            currency: "TWD".to_string(),
-            image_path: saved_filename.clone(),
-            status: "processing".to_string(),
-            payment_status: "unpaid".to_string(),
-            payment_term_id: Some(default_term.id),
-            paid_at: None,
-            error_message: None,
-            created_at: Local::now().to_rfc3339(),
-            updated_at: Local::now().to_rfc3339(),
-        };
-
-        let receipt_id = db.insert_receipt(&initial_receipt).await?;
-
-        // Read image bytes and call Ollama
+        // Read image bytes and call Ollama FIRST
         let full_path = StorageService::resolve_image_path(&saved_filename);
         let img_bytes = std::fs::read(&full_path).with_context(|| "讀取儲存的圖片檔案失敗")?;
 
@@ -88,15 +50,43 @@ impl WatcherService {
         let now = Local::now().to_rfc3339();
         match extract_result {
             Ok(extracted) => {
+                // Ensure ticket number is extracted
+                let receipt_no = match extracted.no {
+                    Some(no) => no,
+                    None => {
+                        StorageService::delete_image_file(&saved_filename).ok();
+                        anyhow::bail!("未能自圖片中辨識出工單號碼（NO.），工單號碼不可為空！請確認圖片清晰度後重新上傳。");
+                    }
+                };
+
+                // Check for uniqueness before inserting
+                if db.check_receipt_no_exists(receipt_no, None).await? {
+                    StorageService::delete_image_file(&saved_filename).ok();
+                    anyhow::bail!("工單號碼 {} 已存在於資料庫中，不可重複建立！", receipt_no);
+                }
+
+                let default_term = db.get_default_payment_term().await?.unwrap_or_else(|| {
+                    crate::models::PaymentTerm {
+                        id: 1,
+                        name: "月結 30 天".to_string(),
+                        duration_code: "30d".to_string(),
+                        duration_days: 30,
+                        is_default: true,
+                        description: None,
+                        created_at: Local::now().to_rfc3339(),
+                    }
+                });
+
+                let today = Local::now().format("%Y-%m-%d").to_string();
                 let final_work_date = extracted
                     .work_date
                     .map(|d| normalize_work_date(&d))
                     .unwrap_or(today);
                 let final_due_date = calculate_due_date(&final_work_date, default_term.duration_days);
 
-                let updated_receipt = Receipt {
-                    id: receipt_id,
-                    no: extracted.no,
+                let new_receipt = Receipt {
+                    id: 0,
+                    no: Some(receipt_no),
                     matainer: extracted.matainer,
                     work_date: final_work_date,
                     due_date: final_due_date,
@@ -112,7 +102,7 @@ impl WatcherService {
                     updated_at: now.clone(),
                 };
 
-                db.update_receipt(&updated_receipt).await?;
+                let receipt_id = db.insert_receipt(&new_receipt).await?;
 
                 // Record into processed_files
                 let pf = ProcessedFile {
@@ -126,30 +116,14 @@ impl WatcherService {
                     processed_at: now,
                 };
                 db.record_processed_file(&pf).await?;
+
+                Ok(receipt_id)
             }
             Err(e) => {
-                let err_msg = format!("{:#}", e);
-                let mut failed_receipt = initial_receipt;
-                failed_receipt.id = receipt_id;
-                failed_receipt.status = "failed".to_string();
-                failed_receipt.error_message = Some(err_msg.clone());
-                db.update_receipt(&failed_receipt).await?;
-
-                let pf = ProcessedFile {
-                    id: 0,
-                    file_path: file_path.to_string_lossy().to_string(),
-                    file_hash: hash,
-                    file_size: size,
-                    receipt_id: Some(receipt_id),
-                    status: "failed".to_string(),
-                    error_message: Some(err_msg),
-                    processed_at: now,
-                };
-                db.record_processed_file(&pf).await?;
+                StorageService::delete_image_file(&saved_filename).ok();
+                anyhow::bail!("Ollama 辨識失敗: {:#}", e);
             }
         }
-
-        Ok(receipt_id)
     }
 
     /// Run background directory watcher loop
@@ -205,7 +179,7 @@ impl WatcherService {
                                         // Wait 500ms for file write to complete
                                         tokio::time::sleep(Duration::from_millis(500)).await;
                                         if path.exists() {
-                                            let _ = Self::process_image_file(&db, &path).await;
+                                            let _ = Self::process_image_file(&db, &path, false).await;
                                         }
                                     }
                                 }
@@ -224,7 +198,7 @@ impl WatcherService {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_file() && Self::is_supported_image(&path) {
-                    let _ = Self::process_image_file(db, &path).await;
+                    let _ = Self::process_image_file(db, &path, false).await;
                 }
             }
         }

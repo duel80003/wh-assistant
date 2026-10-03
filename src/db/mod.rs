@@ -226,10 +226,12 @@ impl Database {
     }
 
     pub async fn insert_receipt(&self, r: &Receipt) -> Result<i64> {
-        if let Some(no) = r.no {
-            if self.check_receipt_no_exists(no, None).await? {
-                anyhow::bail!("工單號碼 {} 已存在於資料庫中，不可重複建立！", no);
-            }
+        let receipt_no = match r.no {
+            Some(n) => n,
+            None => anyhow::bail!("工單號碼（NO.）不可為空！"),
+        };
+        if self.check_receipt_no_exists(receipt_no, None).await? {
+            anyhow::bail!("工單號碼 {} 已存在於資料庫中，不可重複建立！", receipt_no);
         }
 
         let now = Local::now().to_rfc3339();
@@ -265,10 +267,12 @@ impl Database {
     }
 
     pub async fn update_receipt(&self, r: &Receipt) -> Result<()> {
-        if let Some(no) = r.no {
-            if self.check_receipt_no_exists(no, Some(r.id)).await? {
-                anyhow::bail!("工單號碼 {} 已存在於其他工單中，不可重複！", no);
-            }
+        let receipt_no = match r.no {
+            Some(n) => n,
+            None => anyhow::bail!("工單號碼（NO.）不可為空！"),
+        };
+        if self.check_receipt_no_exists(receipt_no, Some(r.id)).await? {
+            anyhow::bail!("工單號碼 {} 已存在於其他工單中，不可重複！", receipt_no);
         }
 
         let now = Local::now().to_rfc3339();
