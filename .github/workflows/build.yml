@@ -1,4 +1,4 @@
-name: Build Desktop App
+name: Build Desktop App (Windows)
 
 on:
   push:
@@ -13,33 +13,9 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build (${{ matrix.platform.name }})
-    runs-on: ${{ matrix.platform.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - name: macOS-AppleSilicon
-            os: macos-14
-            target: aarch64-apple-darwin
-            artifact_name: WHassistant-macOS-arm64
-            bundle_cmd: dx bundle --platform macos --release
-            platform_type: macos
-
-          - name: macOS-Intel
-            os: macos-13
-            target: x86_64-apple-darwin
-            artifact_name: WHassistant-macOS-x64
-            bundle_cmd: dx bundle --platform macos --release
-            platform_type: macos
-
-          - name: Windows-x64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: WHassistant-Windows-x64
-            bundle_cmd: dx bundle --platform windows --release
-            platform_type: windows
+  build-windows:
+    name: Build Windows 11 / 10 (x64)
+    runs-on: windows-latest
 
     steps:
       - name: Checkout source code
@@ -48,12 +24,12 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform.target }}
+          targets: x86_64-pc-windows-msvc
 
       - name: Setup Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.platform.target }}
+          key: x86_64-pc-windows-msvc
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -73,38 +49,12 @@ jobs:
           tool: dioxus-cli
 
       - name: Build & Bundle Desktop App with Dioxus
-        run: ${{ matrix.platform.bundle_cmd }}
-
-      # -------------------------------------------------------------
-      # Packaging for macOS (.dmg and .zip)
-      # -------------------------------------------------------------
-      - name: Package macOS App (.dmg and .zip)
-        if: matrix.platform.platform_type == 'macos'
-        run: |
-          mkdir -p dist
-          APP_PATH=$(find target/dx -name "WHassistant.app" -type d | head -n 1)
-          if [ -z "$APP_PATH" ]; then
-            APP_PATH=$(find target -name "*.app" -type d | head -n 1)
-          fi
-          echo "Found macOS App at: $APP_PATH"
-
-          ARCH_LABEL="${{ matrix.platform.artifact_name }}"
-          DMG_NAME="${ARCH_LABEL}.dmg"
-          ZIP_NAME="${ARCH_LABEL}.zip"
-
-          # 1. Create .dmg installer disk image
-          hdiutil create -volname "WHassistant" -srcfolder "$APP_PATH" -ov -format UDZO "dist/${DMG_NAME}"
-
-          # 2. Create .zip archive preserving Mac metadata and symlinks
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "dist/${ZIP_NAME}"
-
-          ls -lh dist/
+        run: dx bundle --platform windows --release
 
       # -------------------------------------------------------------
       # Packaging for Windows 11/10 (.zip)
       # -------------------------------------------------------------
       - name: Package Windows App (.zip)
-        if: matrix.platform.platform_type == 'windows'
         shell: bash
         run: |
           mkdir -p dist/WHassistant-Windows-x64
@@ -137,7 +87,7 @@ jobs:
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform.artifact_name }}
+          name: WHassistant-Windows-x64
           path: dist/*
           if-no-files-found: error
 

@@ -188,15 +188,13 @@ python3 scripts/seed_fake_data.py
 
 專案已內建完整的 GitHub Actions 自動化建置工作流程（[`.github/workflows/build.yml`](.github/workflows/build.yml)），支援在 GitHub 雲端環境自動編譯 macOS 與 Windows 11 桌面執行檔：
 
-### 支援平台矩陣 (Build Matrix)
-* **macOS (Apple Silicon M1/M2/M3/M4)**：產出 `WHassistant-macOS-arm64.dmg` 與 `.zip`。
-* **macOS (Intel x86_64)**：產出 `WHassistant-macOS-x64.dmg` 與 `.zip`。
+### 支援平台
 * **Windows 11 / 10 (x64)**：產出 `WHassistant-Windows-x64.zip`（包含 `WHassistant.exe` 與完整資源目錄）。
 
 ### 觸發時機
-1. **每次 Push 或 Pull Request 至 `main` 分支**：自動編譯雙平台版本並將產物上傳至該次 GitHub Actions 執行的 Artifacts，供隨時下載測試。
-2. **手動觸發（Manual Trigger）**：前往 GitHub 儲存庫的 **Actions** 分頁，選取 `Build Desktop App` 並點擊 **Run workflow**。
-3. **建立版本發布（Git Tag Release）**：只要推送 `v*` 標籤，系統將自動於 GitHub Releases 頁面發布新版本並附加所有安裝檔：
+1. **每次 Push 或 Pull Request 至 `main` 分支**：自動編譯 Windows 版本並將產物上傳至該次 GitHub Actions 執行的 Artifacts，供隨時下載測試。
+2. **手動觸發（Manual Trigger）**：前往 GitHub 儲存庫的 **Actions** 分頁，選取 `Build Desktop App (Windows)` 並點擊 **Run workflow**。
+3. **建立版本發布（Git Tag Release）**：只要推送 `v*` 標籤，系統將自動於 GitHub Releases 頁面發布新版本並附加 Windows 安裝壓縮檔：
    ```bash
    git tag v0.1.0
    git push origin v0.1.0
