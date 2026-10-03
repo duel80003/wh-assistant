@@ -77,7 +77,7 @@ erDiagram
     }
 
     app_settings {
-        TEXT key PK "設定鍵名 (例: retention_days, ollama_url)"
+        TEXT key PK "設定鍵名 (例: auto_backup_enabled, cloud_images_enabled, monitor_dir)"
         TEXT value "設定值"
         TEXT updated_at "最後更新時間"
     }

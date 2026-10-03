@@ -185,6 +185,11 @@ impl Database {
             ("retention_days", "365"),
             ("monitor_dir", ""),
             ("monitor_enabled", "false"),
+            ("auto_backup_enabled", "false"),
+            ("auto_backup_dir", ""),
+            ("last_backup_time", ""),
+            ("cloud_images_enabled", "false"),
+            ("cloud_images_dir", ""),
         ];
 
         for (k, v) in default_settings {
@@ -700,6 +705,18 @@ mod tests {
             .await
             .expect("Failed to get retention setting");
         assert!(retention.is_some(), "Retention setting should be seeded");
+
+        let auto_backup = db
+            .get_setting("auto_backup_enabled")
+            .await
+            .expect("Failed to get auto_backup_enabled");
+        assert!(auto_backup.is_some(), "auto_backup_enabled should be seeded");
+
+        let cloud_images = db
+            .get_setting("cloud_images_enabled")
+            .await
+            .expect("Failed to get cloud_images_enabled");
+        assert!(cloud_images.is_some(), "cloud_images_enabled should be seeded");
     }
 
     #[tokio::test]

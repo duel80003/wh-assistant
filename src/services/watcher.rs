@@ -1,21 +1,23 @@
+use anyhow::{Context, Result};
+use chrono::Local;
+use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use anyhow::{Context, Result};
-use chrono::Local;
-use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::db::Database;
 use crate::models::{ProcessedFile, Receipt};
+use crate::services::backup::BackupService;
 use crate::services::ollama::OllamaService;
 use crate::services::storage::StorageService;
 use crate::utils::{calculate_due_date, normalize_work_date};
 
 /// High-level Directory Watcher UI State
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum DirectoryWatcherState {
+    #[default]
     Disabled,
     Idle {
         dir: String,
@@ -34,12 +36,6 @@ pub enum DirectoryWatcherState {
         filename: String,
         error: String,
     },
-}
-
-impl Default for DirectoryWatcherState {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 /// Directory Watcher Event sent from background tasks to UI
@@ -124,12 +120,17 @@ impl WatcherService {
         let full_path = StorageService::resolve_image_path(&saved_filename);
         let img_bytes = std::fs::read(&full_path).with_context(|| "讀取儲存的圖片檔案失敗")?;
 
-        let ollama_url = db.get_setting("ollama_url").await?
+        let ollama_url = db
+            .get_setting("ollama_url")
+            .await?
             .unwrap_or_else(|| "http://localhost:11434".to_string());
-        let ollama_model = db.get_setting("ollama_model").await?
+        let ollama_model = db
+            .get_setting("ollama_model")
+            .await?
             .unwrap_or_else(|| "llama3.2-vision".to_string());
 
-        let extract_result = OllamaService::extract_receipt(&ollama_url, &ollama_model, &img_bytes).await;
+        let extract_result =
+            OllamaService::extract_receipt(&ollama_url, &ollama_model, &img_bytes).await;
 
         let now = Local::now().to_rfc3339();
         match extract_result {
@@ -166,7 +167,8 @@ impl WatcherService {
                     .work_date
                     .map(|d| normalize_work_date(&d))
                     .unwrap_or(today);
-                let final_due_date = calculate_due_date(&final_work_date, default_term.duration_days);
+                let final_due_date =
+                    calculate_due_date(&final_work_date, default_term.duration_days);
 
                 let new_receipt = Receipt {
                     id: 0,
@@ -250,6 +252,7 @@ impl WatcherService {
                     receipt_id,
                     receipt_no,
                 });
+                let _ = BackupService::trigger_auto_cloud_backup(db).await;
             }
             Err(e) => {
                 let err_msg = format!("{:#}", e);
@@ -276,10 +279,7 @@ impl WatcherService {
     }
 
     /// Run background directory watcher loop
-    pub async fn start_background_watcher(
-        db: Database,
-        shutdown_signal: Arc<AtomicBool>,
-    ) {
+    pub async fn start_background_watcher(db: Database, shutdown_signal: Arc<AtomicBool>) {
         let mut last_enabled: Option<bool> = None;
         let mut last_dir = String::new();
 
@@ -289,8 +289,17 @@ impl WatcherService {
             }
 
             // Check if monitoring is enabled in settings
-            let enabled = db.get_setting("monitor_enabled").await.unwrap_or(None).unwrap_or_default() == "true";
-            let dir_str = db.get_setting("monitor_dir").await.unwrap_or(None).unwrap_or_default();
+            let enabled = db
+                .get_setting("monitor_enabled")
+                .await
+                .unwrap_or(None)
+                .unwrap_or_default()
+                == "true";
+            let dir_str = db
+                .get_setting("monitor_dir")
+                .await
+                .unwrap_or(None)
+                .unwrap_or_default();
 
             if last_enabled != Some(enabled) || last_dir != dir_str {
                 last_enabled = Some(enabled);
@@ -313,7 +322,8 @@ impl WatcherService {
                     let watcher_res = RecommendedWatcher::new(
                         move |res: notify::Result<Event>| {
                             if let Ok(event) = res {
-                                if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+                                if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
+                                {
                                     for path in event.paths {
                                         if Self::is_supported_image(&path) {
                                             let _ = tx.blocking_send(path);
@@ -326,7 +336,10 @@ impl WatcherService {
                     );
 
                     if let Ok(mut watcher) = watcher_res {
-                        if watcher.watch(&watch_path, RecursiveMode::NonRecursive).is_ok() {
+                        if watcher
+                            .watch(&watch_path, RecursiveMode::NonRecursive)
+                            .is_ok()
+                        {
                             // Listen to events for up to 8 seconds before re-checking settings
                             let timeout = tokio::time::sleep(Duration::from_secs(8));
                             tokio::pin!(timeout);
@@ -374,11 +387,21 @@ mod tests {
     fn test_is_supported_image() {
         assert!(WatcherService::is_supported_image(Path::new("receipt.png")));
         assert!(WatcherService::is_supported_image(Path::new("RECEIPT.JPG")));
-        assert!(WatcherService::is_supported_image(Path::new("receipt.jpeg")));
-        assert!(WatcherService::is_supported_image(Path::new("receipt.webp")));
-        assert!(!WatcherService::is_supported_image(Path::new("receipt.pdf")));
-        assert!(!WatcherService::is_supported_image(Path::new("receipt.txt")));
-        assert!(!WatcherService::is_supported_image(Path::new("no_extension")));
+        assert!(WatcherService::is_supported_image(Path::new(
+            "receipt.jpeg"
+        )));
+        assert!(WatcherService::is_supported_image(Path::new(
+            "receipt.webp"
+        )));
+        assert!(!WatcherService::is_supported_image(Path::new(
+            "receipt.pdf"
+        )));
+        assert!(!WatcherService::is_supported_image(Path::new(
+            "receipt.txt"
+        )));
+        assert!(!WatcherService::is_supported_image(Path::new(
+            "no_extension"
+        )));
     }
 
     #[tokio::test]

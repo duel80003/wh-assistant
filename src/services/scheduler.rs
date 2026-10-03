@@ -4,6 +4,7 @@ use std::time::Duration;
 use chrono::{Local, Timelike};
 
 use crate::db::Database;
+use crate::services::backup::BackupService;
 
 pub struct SchedulerService;
 
@@ -13,10 +14,12 @@ impl SchedulerService {
         db: Database,
         shutdown_signal: Arc<AtomicBool>,
     ) {
-        // 1. Startup cleanup check
+        // 1. Startup cleanup check and automatic cloud snapshot
         Self::run_retention_cleanup(&db).await;
+        let _ = BackupService::trigger_auto_cloud_backup(&db).await;
 
         let mut last_cleanup_day = Local::now().date_naive();
+        let mut last_backup_hour = Local::now().hour();
 
         // 2. Loop and check periodically
         loop {
@@ -28,6 +31,13 @@ impl SchedulerService {
 
             let now = Local::now();
             let today = now.date_naive();
+            let current_hour = now.hour();
+
+            // Periodic auto backup every hour
+            if current_hour != last_backup_hour {
+                let _ = BackupService::trigger_auto_cloud_backup(&db).await;
+                last_backup_hour = current_hour;
+            }
 
             // Check if it is 10:00 AM (hour == 10 and minute == 0) and we haven't run today
             if now.hour() == 10 && now.minute() == 0 && today != last_cleanup_day {

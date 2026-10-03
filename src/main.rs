@@ -82,6 +82,15 @@ fn App() -> Element {
                             .await;
                     });
 
+                    // Initialize cloud images storage setting if enabled
+                    let cloud_img_enabled = db.get_setting("cloud_images_enabled").await.unwrap_or(None).unwrap_or_default() == "true";
+                    let cloud_img_dir = db.get_setting("cloud_images_dir").await.unwrap_or(None).unwrap_or_default();
+                    if cloud_img_enabled && !cloud_img_dir.trim().is_empty() {
+                        services::storage::StorageService::set_custom_images_dir(Some(std::path::PathBuf::from(cloud_img_dir.trim())));
+                    } else {
+                        services::storage::StorageService::set_custom_images_dir(None);
+                    }
+
                     db_signal.set(Some(db));
                 }
                 Err(e) => {

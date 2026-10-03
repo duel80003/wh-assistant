@@ -166,6 +166,7 @@ pub fn ReviewView() -> Element {
                             )));
                             reload();
                             refresh_badges.trigger();
+                            let _ = crate::services::backup::BackupService::trigger_auto_cloud_backup(&db).await;
                         }
                         Err(e) => {
                             status_message.set(Some((format!("儲存工單失敗: {:#}", e), true)));
@@ -191,6 +192,7 @@ pub fn ReviewView() -> Element {
                         status_message.set(Some(("單據及圖片檔案已成功刪除。".to_string(), false)));
                         reload();
                         refresh_badges.trigger();
+                        let _ = crate::services::backup::BackupService::trigger_auto_cloud_backup(&db).await;
                     }
                 });
             }

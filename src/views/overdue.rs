@@ -57,6 +57,7 @@ pub fn OverdueView() -> Element {
                 }
                 reload();
                 refresh_badges.trigger();
+                let _ = crate::services::backup::BackupService::trigger_auto_cloud_backup(&db).await;
             });
         }
     };

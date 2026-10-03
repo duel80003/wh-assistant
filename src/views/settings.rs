@@ -1,8 +1,9 @@
-use dioxus::prelude::*;
 use chrono::Local;
+use dioxus::prelude::*;
 
 use crate::db::Database;
 use crate::models::PaymentTerm;
+use crate::services::backup::BackupService;
 use crate::services::ollama::OllamaService;
 use crate::services::storage::StorageService;
 use crate::services::updater::{UpdateInfo, UpdateStatus, UpdaterService};
@@ -25,6 +26,23 @@ pub fn SettingsView() -> Element {
     let mut monitor_dir = use_signal(String::new);
     let mut monitor_enabled = use_signal(|| false);
     let mut retention_days = use_signal(|| "365".to_string());
+
+    // Backup & Restore fields & signals
+    let mut auto_backup_enabled = use_signal(|| false);
+    let mut auto_backup_dir = use_signal(String::new);
+    let mut last_backup_time = use_signal(|| "尚未執行過備份".to_string());
+    let mut backup_notice = use_signal(|| Option::<(String, bool)>::None);
+    let mut is_exporting_backup = use_signal(|| false);
+    let mut is_restoring_backup = use_signal(|| false);
+    let mut show_restore_confirm_modal = use_signal(|| false);
+    let mut restore_file_path = use_signal(|| Option::<std::path::PathBuf>::None);
+    let mut restore_success = use_signal(|| false);
+
+    // Cloud Images fields & signals
+    let mut cloud_images_enabled = use_signal(|| false);
+    let mut cloud_images_dir = use_signal(String::new);
+    let mut cloud_images_notice = use_signal(|| Option::<(String, bool)>::None);
+    let mut is_copying_images = use_signal(|| false);
 
     // Status & Feedback signals
     let mut test_result = use_signal(|| Option::<(String, bool)>::None); // (text, is_success)
@@ -65,6 +83,21 @@ pub fn SettingsView() -> Element {
                 if let Ok(Some(v)) = db.get_setting("retention_days").await {
                     retention_days.set(v);
                 }
+                if let Ok(Some(v)) = db.get_setting("auto_backup_enabled").await {
+                    auto_backup_enabled.set(v == "true");
+                }
+                if let Ok(Some(v)) = db.get_setting("auto_backup_dir").await {
+                    auto_backup_dir.set(v);
+                }
+                if let Ok(Some(v)) = db.get_setting("last_backup_time").await {
+                    last_backup_time.set(v);
+                }
+                if let Ok(Some(v)) = db.get_setting("cloud_images_enabled").await {
+                    cloud_images_enabled.set(v == "true");
+                }
+                if let Ok(Some(v)) = db.get_setting("cloud_images_dir").await {
+                    cloud_images_dir.set(v);
+                }
             });
         }
     };
@@ -85,14 +118,243 @@ pub fn SettingsView() -> Element {
                 let _ = db.set_setting("ollama_url", &ollama_url()).await;
                 let _ = db.set_setting("ollama_model", &ollama_model()).await;
                 let _ = db.set_setting("monitor_dir", &monitor_dir()).await;
-                let _ = db.set_setting("monitor_enabled", if monitor_enabled() { "true" } else { "false" }).await;
+                let _ = db
+                    .set_setting(
+                        "monitor_enabled",
+                        if monitor_enabled() { "true" } else { "false" },
+                    )
+                    .await;
                 let _ = db.set_setting("retention_days", &retention_days()).await;
+                let _ = db
+                    .set_setting(
+                        "auto_backup_enabled",
+                        if auto_backup_enabled() {
+                            "true"
+                        } else {
+                            "false"
+                        },
+                    )
+                    .await;
+                let _ = db.set_setting("auto_backup_dir", &auto_backup_dir()).await;
+                let _ = db
+                    .set_setting(
+                        "cloud_images_enabled",
+                        if cloud_images_enabled() {
+                            "true"
+                        } else {
+                            "false"
+                        },
+                    )
+                    .await;
+                let _ = db
+                    .set_setting("cloud_images_dir", &cloud_images_dir())
+                    .await;
+
+                // Sync custom images dir to StorageService
+                if cloud_images_enabled() && !cloud_images_dir().trim().is_empty() {
+                    StorageService::set_custom_images_dir(Some(cloud_images_dir().trim().into()));
+                } else {
+                    StorageService::set_custom_images_dir(None);
+                }
+
                 WatcherService::emit(WatcherEvent::StatusChanged {
                     enabled: monitor_enabled(),
                     dir: monitor_dir(),
                 });
+
+                if auto_backup_enabled() {
+                    let _ = BackupService::trigger_auto_cloud_backup(&db).await;
+                    if let Ok(Some(v)) = db.get_setting("last_backup_time").await {
+                        last_backup_time.set(v);
+                    }
+                }
+
                 save_notice.set(Some("✓ 系統設定已成功儲存！".to_string()));
             });
+        }
+    };
+
+    // Pick cloud images directory handler
+    let handle_pick_cloud_images_dir = {
+        move |_| {
+            spawn(async move {
+                if let Some(folder) = rfd::AsyncFileDialog::new()
+                    .set_title("選擇掃描圖片存放之雲端同步資料夾（例如 Google Drive、OneDrive 或 Dropbox）")
+                    .pick_folder()
+                    .await
+                {
+                    cloud_images_dir.set(folder.path().to_string_lossy().to_string());
+                }
+            });
+        }
+    };
+
+    // Copy all local images to cloud directory handler
+    let handle_copy_images_to_cloud = {
+        move |_| {
+            let target_str = cloud_images_dir();
+            if target_str.trim().is_empty() {
+                cloud_images_notice.set(Some(("請先選取雲端圖片目標資料夾！".to_string(), true)));
+                return;
+            }
+            let target_path = std::path::PathBuf::from(target_str.trim());
+            is_copying_images.set(true);
+            spawn(async move {
+                match StorageService::copy_all_images_to_custom_dir(Some(&target_path)) {
+                    Ok(count) => {
+                        cloud_images_notice.set(Some((
+                            format!("✓ 成功將 {} 張本地圖片完整複製同步至雲端目錄！", count),
+                            false,
+                        )));
+                    }
+                    Err(e) => {
+                        cloud_images_notice.set(Some((
+                            format!("複製圖片至雲端目錄失敗: {:#}", e),
+                            true,
+                        )));
+                    }
+                }
+                is_copying_images.set(false);
+            });
+        }
+    };
+
+    // Pick backup directory handler
+    let handle_pick_backup_dir = {
+        move |_| {
+            spawn(async move {
+                if let Some(folder) = rfd::AsyncFileDialog::new()
+                    .set_title("選擇自動備份同步資料夾（可選 Google Drive、OneDrive 或本地目錄）")
+                    .pick_folder()
+                    .await
+                {
+                    auto_backup_dir.set(folder.path().to_string_lossy().to_string());
+                }
+            });
+        }
+    };
+
+    // Manual cloud snapshot handler
+    let handle_manual_snapshot = {
+        let db = db.clone();
+        move |_| {
+            let db = db.clone();
+            spawn(async move {
+                let target_dir = auto_backup_dir();
+                if target_dir.trim().is_empty() {
+                    backup_notice.set(Some(("請先設定備份目標資料夾！".to_string(), true)));
+                    return;
+                }
+                let target =
+                    std::path::PathBuf::from(target_dir.trim()).join("whassistant_snapshot.db");
+                match BackupService::backup_db_snapshot(&db, &target).await {
+                    Ok(()) => {
+                        let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                        let _ = db.set_setting("last_backup_time", &now_str).await;
+                        last_backup_time.set(now_str);
+                        backup_notice.set(Some((
+                            "✓ 資料庫已成功安全備份至指定資料夾！".to_string(),
+                            false,
+                        )));
+                    }
+                    Err(e) => {
+                        backup_notice.set(Some((format!("備份失敗: {:#}", e), true)));
+                    }
+                }
+            });
+        }
+    };
+
+    // Export full ZIP backup handler
+    let handle_export_zip = {
+        let db = db.clone();
+        move |_| {
+            let db = db.clone();
+            spawn(async move {
+                let default_name = format!(
+                    "whassistant_backup_{}.zip",
+                    chrono::Local::now().format("%Y%m%d_%H%M%S")
+                );
+                if let Some(handle) = rfd::AsyncFileDialog::new()
+                    .set_title("匯出完整系統備份檔案 (.zip)")
+                    .set_file_name(&default_name)
+                    .add_filter("ZIP 備份壓縮檔", &["zip"])
+                    .save_file()
+                    .await
+                {
+                    is_exporting_backup.set(true);
+                    let path = handle.path().to_path_buf();
+                    match BackupService::export_full_backup_zip(&db, &path).await {
+                        Ok((size, img_count)) => {
+                            let size_mb = (size as f64) / 1024.0 / 1024.0;
+                            backup_notice.set(Some((
+                                format!(
+                                    "✓ 完整備份匯出成功！大小：{:.2} MB，共打包 {} 張單據圖檔。",
+                                    size_mb, img_count
+                                ),
+                                false,
+                            )));
+                        }
+                        Err(e) => {
+                            backup_notice.set(Some((format!("匯出備份失敗: {:#}", e), true)));
+                        }
+                    }
+                    is_exporting_backup.set(false);
+                }
+            });
+        }
+    };
+
+    // Pick restore ZIP file handler
+    let handle_pick_restore_file = {
+        move |_| {
+            spawn(async move {
+                if let Some(handle) = rfd::AsyncFileDialog::new()
+                    .set_title("選取要還原的 WHassistant 備份檔（.zip 備份包 或 .db 快照檔）")
+                    .add_filter("WHassistant 備份檔案 (*.zip, *.db)", &["zip", "db"])
+                    .pick_file()
+                    .await
+                {
+                    restore_file_path.set(Some(handle.path().to_path_buf()));
+                    restore_success.set(false);
+                    show_restore_confirm_modal.set(true);
+                }
+            });
+        }
+    };
+
+    // Execute restore handler
+    let handle_execute_restore = {
+        move |_| {
+            if let Some(path) = restore_file_path() {
+                is_restoring_backup.set(true);
+                spawn(async move {
+                    match BackupService::restore_any_backup(&path) {
+                        Ok((img_count, is_zip)) => {
+                            restore_success.set(true);
+                            if is_zip {
+                                backup_notice.set(Some((
+                                    format!(
+                                        "✓ 系統資料庫與 {} 張圖檔已成功還原！請點選重啟軟體。",
+                                        img_count
+                                    ),
+                                    false,
+                                )));
+                            } else {
+                                backup_notice.set(Some((
+                                    "✓ 資料庫快照已成功還原！請點選重啟軟體。".to_string(),
+                                    false,
+                                )));
+                            }
+                        }
+                        Err(e) => {
+                            backup_notice.set(Some((format!("還原備份失敗: {:#}", e), true)));
+                            show_restore_confirm_modal.set(false);
+                        }
+                    }
+                    is_restoring_backup.set(false);
+                });
+            }
         }
     };
 
@@ -117,7 +379,11 @@ pub fn SettingsView() -> Element {
                     Ok(models) => {
                         let count = models.len();
                         test_result.set(Some((
-                            format!("✓ 連線成功！Ollama 正常運行中，本機已安裝 {} 個模型 ({})", count, models.join(", ")),
+                            format!(
+                                "✓ 連線成功！Ollama 正常運行中，本機已安裝 {} 個模型 ({})",
+                                count,
+                                models.join(", ")
+                            ),
                             true,
                         )));
                     }
@@ -166,7 +432,10 @@ pub fn SettingsView() -> Element {
                 let days: i64 = retention_days().parse().unwrap_or(365);
                 match db.cleanup_expired_paid_receipts(days).await {
                     Ok(count) => {
-                        cleanup_notice.set(Some(format!("✓ 清理完成！共刪除 {} 筆已收費過期單據與關聯圖片檔案。", count)));
+                        cleanup_notice.set(Some(format!(
+                            "✓ 清理完成！共刪除 {} 筆已收費過期單據與關聯圖片檔案。",
+                            count
+                        )));
                     }
                     Err(e) => {
                         cleanup_notice.set(Some(format!("✕ 清理失敗: {:#}", e)));
@@ -385,12 +654,102 @@ pub fn SettingsView() -> Element {
                 }
             }
 
-            // Section 4: 系統託管儲存路徑
-            div { class: "bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm flex flex-col gap-2",
-                h2 { class: "text-sm font-semibold text-slate-100", "應用程式原生託管目錄" }
-                p { class: "text-xs text-slate-400", "系統已依據您當前的作業系統，自動將圖片與 SQLite 資料庫存放於標準原生資料目錄中：" }
-                div { class: "bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-xs text-indigo-300 break-all select-all",
-                    "{StorageService::get_images_dir().to_string_lossy()}"
+            // Section 4: 單據圖檔儲存與雲端目錄指向 (Scanned Images Storage & Cloud Sync)
+            div { class: "bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm flex flex-col gap-4",
+                div { class: "border-b border-slate-800 pb-3",
+                    h2 { class: "text-sm font-semibold text-slate-100 flex items-center gap-2",
+                        span { "☁️" }
+                        "單據圖檔儲存與雲端目錄指向 (Scanned Images Cloud Storage)"
+                    }
+                    p { class: "text-xs text-slate-400 mt-0.5",
+                        "可獨立開關此功能，將掃描識別後的單據圖檔直接存放至 Google 雲端硬碟、OneDrive 或自訂目錄中。系統內建雙軌檢索，舊有圖片絕不遺失破圖。"
+                    }
+                }
+
+                if let Some((msg, is_err)) = cloud_images_notice() {
+                    div {
+                        class: if is_err {
+                            "px-4 py-3 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-300 text-xs flex items-center justify-between"
+                        } else {
+                            "px-4 py-3 rounded-lg bg-emerald-950/40 border border-emerald-800 text-emerald-300 text-xs flex items-center justify-between"
+                        },
+                        span { "{msg}" }
+                        button {
+                            class: "text-slate-400 hover:text-white text-xs cursor-pointer",
+                            onclick: move |_| cloud_images_notice.set(None),
+                            "✕"
+                        }
+                    }
+                }
+
+                div { class: "flex flex-col gap-3 p-4 bg-slate-950 rounded-xl border border-slate-800",
+                    // Switch row
+                    div { class: "flex items-center justify-between",
+                        div { class: "flex flex-col gap-0.5",
+                            span { class: "text-xs font-semibold text-slate-200", "雲端/自訂圖檔儲存指向開關" }
+                            span { class: "text-[11px] text-slate-400",
+                                "啟用後，新掃描入庫之單據圖片將直接存放於下方指定之雲端目錄；停用時則存於系統預設本機路徑。"
+                            }
+                        }
+
+                        button {
+                            class: if cloud_images_enabled() {
+                                "px-4 py-1.5 bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold rounded-lg hover:bg-emerald-600/30 transition-colors cursor-pointer"
+                            } else {
+                                "px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-medium rounded-lg transition-colors cursor-pointer"
+                            },
+                            onclick: move |_| cloud_images_enabled.set(!cloud_images_enabled()),
+                            if cloud_images_enabled() { "● 雲端指向運作中 (點擊停用)" } else { "○ 預設本機儲存 (點擊啟用雲端指向)" }
+                        }
+                    }
+
+                    // Directory Path Selector
+                    div { class: "flex flex-col gap-1.5 pt-2 border-t border-slate-800/60",
+                        label { class: "text-xs font-medium text-slate-300", "雲端/自訂同步資料夾路徑 (例如 Google Drive / OneDrive 資料夾)" }
+                        div { class: "flex items-center gap-2",
+                            input {
+                                r#type: "text",
+                                placeholder: "尚未設定雲端資料夾，例如：/Users/.../Google 雲端硬碟/單據圖片...",
+                                value: "{cloud_images_dir}",
+                                oninput: move |e| cloud_images_dir.set(e.value()),
+                                class: "flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder-slate-600 outline-none font-mono"
+                            }
+                            button {
+                                class: "px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition-colors cursor-pointer shrink-0",
+                                onclick: handle_pick_cloud_images_dir,
+                                "📁 選擇雲端目錄"
+                            }
+                        }
+                    }
+
+                    // Migration tool & default directory info
+                    div { class: "flex items-center justify-between pt-2 border-t border-slate-800/60 flex-wrap gap-2",
+                        button {
+                            disabled: is_copying_images() || cloud_images_dir().trim().is_empty(),
+                            class: "px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-medium rounded-lg shadow-sm transition-colors cursor-pointer flex items-center gap-1.5",
+                            onclick: handle_copy_images_to_cloud,
+                            if is_copying_images() {
+                                span { "⏳ 正在複製同步本機圖片中..." }
+                            } else {
+                                span { "📥 將本機現有圖檔全數複製同步至雲端目錄" }
+                            }
+                        }
+
+                        div { class: "flex items-center gap-1.5 text-[11px] text-slate-400 font-mono",
+                            span { "本機原生目錄：" }
+                            span { class: "text-indigo-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 truncate max-w-xs",
+                                "{StorageService::get_images_dir().to_string_lossy()}"
+                            }
+                        }
+                    }
+
+                    // Smart Fallback Explanation
+                    div { class: "p-3 bg-slate-900/60 border border-slate-800/60 rounded-lg flex items-start gap-2 text-[11px] text-slate-400",
+                        span { "💡" }
+                        span {
+                            "智慧雙向搜尋保障：檢視工單照片時，系統會自動在雲端資料夾與本機資料夾雙向查找。無論何時切換資料夾或開關此功能，過去儲存的照片皆能正常顯示，絕不遺失或破圖。"
+                        }
+                    }
                 }
             }
 
@@ -433,7 +792,131 @@ pub fn SettingsView() -> Element {
                 }
             }
 
-            // Section 6: 軟體版本與熱更新 (Software Version & Hot Update)
+            // Section 6: 資料庫備份與資料復原 (Data Backup & Recovery)
+            div { class: "bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm flex flex-col gap-5",
+                div { class: "border-b border-slate-800 pb-3 flex items-center justify-between",
+                    div {
+                        h2 { class: "text-sm font-semibold text-slate-100 flex items-center gap-2",
+                            span { "🛡️" }
+                            "資料庫備份與資料復原 (Data Backup & Recovery)"
+                        }
+                        p { class: "text-xs text-slate-400 mt-0.5",
+                            "提供完善的資料安全防護機制。支援自動將最新資料同步備份至雲端硬碟（Google 雲端硬碟 / OneDrive），亦可一鍵打包所有工單與照片匯出或還原。"
+                        }
+                    }
+                }
+
+                // Status Notice
+                if let Some((msg, is_err)) = backup_notice() {
+                    div {
+                        class: if is_err {
+                            "px-4 py-3 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-300 text-xs flex items-center justify-between"
+                        } else {
+                            "px-4 py-3 rounded-lg bg-emerald-950/40 border border-emerald-800 text-emerald-300 text-xs flex items-center justify-between"
+                        },
+                        span { "{msg}" }
+                        button {
+                            class: "text-slate-400 hover:text-white text-xs cursor-pointer",
+                            onclick: move |_| backup_notice.set(None),
+                            "✕"
+                        }
+                    }
+                }
+
+                // Sub-section 1: 雲端同步硬碟自動備份 (Google Drive / OneDrive)
+                div { class: "flex flex-col gap-3 p-4 bg-slate-950 rounded-xl border border-slate-800/80",
+                    div { class: "flex items-center justify-between",
+                        div { class: "flex flex-col gap-0.5",
+                            span { class: "text-xs font-semibold text-slate-200 flex items-center gap-1.5",
+                                span { "☁️" }
+                                "雲端硬碟自動同步備份 (Cloud Auto Backup)"
+                            }
+                            span { class: "text-[11px] text-slate-400",
+                                "可指定電腦中的 Google 雲端硬碟、OneDrive 或 Dropbox 資料夾。系統會定時將最新資料安全備份至該處，並由雲端軟體自動上傳保存。"
+                            }
+                        }
+                        label { class: "relative inline-flex items-center cursor-pointer",
+                            input {
+                                r#type: "checkbox",
+                                checked: auto_backup_enabled(),
+                                onchange: move |e| auto_backup_enabled.set(e.value() == "true"),
+                                class: "sr-only peer"
+                            }
+                            div { class: "w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600" }
+                        }
+                    }
+
+                    div { class: "flex items-center gap-3 pt-2",
+                        input {
+                            r#type: "text",
+                            readonly: true,
+                            placeholder: "請選擇目標同步目錄（例如 ~/Google Drive/WHassistant/）",
+                            value: "{auto_backup_dir}",
+                            class: "flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 outline-none font-mono"
+                        }
+                        button {
+                            class: "px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg border border-slate-700 transition-colors cursor-pointer shrink-0",
+                            onclick: handle_pick_backup_dir,
+                            "📁 選擇雲端目錄"
+                        }
+                        button {
+                            disabled: auto_backup_dir().trim().is_empty(),
+                            class: "px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer shrink-0",
+                            onclick: handle_manual_snapshot,
+                            "⚡ 立即手動備份"
+                        }
+                    }
+
+                    div { class: "flex items-center justify-between text-[11px] text-slate-500 pt-1 font-mono",
+                        span { "備份檔案：whassistant_snapshot.db（自動保持最新狀態）" }
+                        span { "最近一次備份時間：{last_backup_time}" }
+                    }
+                }
+
+                // Sub-section 2: 完整備份包匯出與還原 (ZIP 打包)
+                div { class: "flex flex-col gap-3 p-4 bg-slate-950 rounded-xl border border-slate-800/80",
+                    div { class: "flex flex-col gap-0.5",
+                        span { class: "text-xs font-semibold text-slate-200 flex items-center gap-1.5",
+                            span { "📦" }
+                            "完整備份封裝與系統還原 (Full Backup & Restore)"
+                        }
+                        span { class: "text-[11px] text-slate-400",
+                            "將所有工單資料與留存的照片原圖完整打包成一個 ZIP 壓縮檔，適合用來搬移到新電腦或存入隨身碟永久保存。"
+                        }
+                    }
+
+                    div { class: "flex items-center justify-between pt-2 border-t border-slate-800/60",
+                        div { class: "flex items-center gap-2",
+                            span { class: "text-xs text-slate-400", "備份內容涵蓋：" }
+                            span { class: "px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[11px] font-mono", "工單資料" }
+                            span { class: "px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[11px] font-mono", "全部照片原圖" }
+                            span { class: "px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[11px] font-mono", "設定參數" }
+                        }
+
+                        div { class: "flex items-center gap-3",
+                            button {
+                                disabled: is_exporting_backup(),
+                                class: "px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer flex items-center gap-1.5",
+                                onclick: handle_export_zip,
+                                if is_exporting_backup() {
+                                    span { "正在打包匯出中..." }
+                                } else {
+                                    span { "💾 匯出完整備份包 (.zip)" }
+                                }
+                            }
+
+                            button {
+                                disabled: is_restoring_backup(),
+                                class: "px-4 py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 hover:text-amber-300 border border-slate-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5",
+                                onclick: handle_pick_restore_file,
+                                span { "♻️ 從備份檔還原系統..." }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Section 7: 軟體版本與熱更新 (Software Version & Hot Update)
             div { class: "bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm flex flex-col gap-4",
                 div { class: "border-b border-slate-800 pb-3",
                     h2 { class: "text-sm font-semibold text-slate-100", "軟體版本與線上熱更新 (Software Updates)" }
@@ -624,6 +1107,75 @@ pub fn SettingsView() -> Element {
                                 class: "px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer",
                                 onclick: handle_execute_cleanup,
                                 "確認執行清理"
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Modal: Confirm Restore from Backup
+            if show_restore_confirm_modal() {
+                div { class: "fixed inset-0 bg-black/80 backdrop-blur-xs z-50 flex items-center justify-center p-4",
+                    div { class: "bg-slate-900 border border-amber-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150",
+                        div { class: "flex items-center gap-3 text-amber-400 font-bold text-base border-b border-slate-800 pb-3",
+                            span { class: "text-2xl", "⚠️" }
+                            span { "重要提醒：準備進行系統資料還原" }
+                        }
+
+                        if restore_success() {
+                            div { class: "flex flex-col gap-3 py-2",
+                                div { class: "p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-lg text-emerald-300 text-xs flex items-center gap-2",
+                                    span { "✅" }
+                                    span { "資料庫與單據照片已成功還原！" }
+                                }
+                                p { class: "text-xs text-slate-300 leading-relaxed",
+                                    "為確保新載入之資料庫連接正常生效，請立即重啟應用程式。"
+                                }
+                                div { class: "flex justify-end pt-3 border-t border-slate-800",
+                                    button {
+                                        class: "px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer",
+                                        onclick: move |_| {
+                                            let _ = UpdaterService::restart_app();
+                                        },
+                                        "立即重啟應用程式"
+                                    }
+                                }
+                            }
+                        } else {
+                            div { class: "flex flex-col gap-3 text-xs text-slate-300 leading-relaxed",
+                                p { class: "text-rose-400 font-semibold",
+                                    "【注意】從備份還原將會使用選取的備份檔案覆蓋目前軟體中的所有工單資料與圖片！"
+                                }
+                                if let Some(path) = restore_file_path() {
+                                    div { class: "p-2.5 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] text-slate-400 break-all",
+                                        "選取檔案：{path.display()}"
+                                    }
+                                }
+                                p {
+                                    "還原完成後，應用程式將提示您重新啟動以完整讀取新資料庫。請問是否確認繼續？"
+                                }
+                            }
+
+                            div { class: "flex justify-end gap-3 pt-3 border-t border-slate-800",
+                                button {
+                                    disabled: is_restoring_backup(),
+                                    class: "px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer",
+                                    onclick: move |_| {
+                                        show_restore_confirm_modal.set(false);
+                                        restore_file_path.set(None);
+                                    },
+                                    "取消"
+                                }
+                                button {
+                                    disabled: is_restoring_backup(),
+                                    class: "px-5 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shadow transition-colors cursor-pointer",
+                                    onclick: handle_execute_restore,
+                                    if is_restoring_backup() {
+                                        "正在解壓還原中..."
+                                    } else {
+                                        "確認覆蓋並還原"
+                                    }
+                                }
                             }
                         }
                     }

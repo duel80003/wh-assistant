@@ -65,7 +65,18 @@ CREATE TABLE IF NOT EXISTS processed_files (
 
 -- ------------------------------------------------------------------------------
 -- 4. 系統環境設定表 (app_settings)
--- 說明: 存放 Ollama 連線、監控目錄、資料保留天數等全域鍵值設定
+-- 說明: 存放 Ollama 連線、監控目錄、資料保留天數、自動備份與雲端圖片指向等全域鍵值設定
+-- 鍵值說明:
+--   - ollama_url: Ollama API 服務端點 (預設 http://localhost:11434)
+--   - ollama_model: 視覺辨識模型名稱 (預設 llama3.2-vision)
+--   - retention_days: 已收款工單歷史保留天數 (預設 365 天，0 為永久保存)
+--   - monitor_dir: 目錄監控資料夾路徑
+--   - monitor_enabled: 是否啟用背景目錄監聽 (true/false)
+--   - auto_backup_enabled: 是否啟用資料庫定時/自動雲端快照備份 (true/false)
+--   - auto_backup_dir: 資料庫快照存放目錄 (Google Drive / OneDrive / 本機路徑)
+--   - last_backup_time: 最近一次成功輸出快照的時間戳記
+--   - cloud_images_enabled: 是否啟用工單圖片雲端同步目錄指向 (true/false)
+--   - cloud_images_dir: 工單圖片存放之雲端同步目錄路徑
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,                       -- 設定項鍵值
@@ -103,4 +114,9 @@ VALUES
     ('ollama_model', 'llama3.2-vision', datetime('now', 'localtime')),
     ('retention_days', '365', datetime('now', 'localtime')),
     ('monitor_dir', '', datetime('now', 'localtime')),
-    ('monitor_enabled', 'false', datetime('now', 'localtime'));
+    ('monitor_enabled', 'false', datetime('now', 'localtime')),
+    ('auto_backup_enabled', 'false', datetime('now', 'localtime')),
+    ('auto_backup_dir', '', datetime('now', 'localtime')),
+    ('last_backup_time', '', datetime('now', 'localtime')),
+    ('cloud_images_enabled', 'false', datetime('now', 'localtime')),
+    ('cloud_images_dir', '', datetime('now', 'localtime'));
