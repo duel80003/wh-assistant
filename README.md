@@ -275,7 +275,7 @@ python3 scripts/seed_fake_data.py
 
 ```mermaid
 flowchart TD
-    subgraph 備份觸發時機 (Triggers)
+    subgraph SG1 ["備份觸發時機 (Triggers)"]
         T1["⏰ 軟體開機啟動"]
         T2["🕒 背景定時排程 (每小時)"]
         T3["📷 目錄監控辨識完成"]
@@ -284,13 +284,18 @@ flowchart TD
         T6["⚡ 點擊【立即手動備份】"]
     end
 
-    subgraph 備份保存途徑 (Targets)
+    subgraph SG2 ["備份保存途徑 (Targets)"]
         Action1["資料庫無損安全快照<br/>(產生 whassistant_snapshot.db)"]
         Action2["工單圖片儲存指向<br/>(新照片直存雲端資料夾)"]
         Action3["完整離線備份壓縮檔<br/>(打包輸出 .zip)"]
     end
 
-    T1 & T2 & T3 & T4 & T5 & T6 --> Action1
+    T1 --> Action1
+    T2 --> Action1
+    T3 --> Action1
+    T4 --> Action1
+    T5 --> Action1
+    T6 --> Action1
     Action1 --> CloudSync["☁️ Google 雲端硬碟 / OneDrive 自動同步"]
     Action2 --> CloudSync
     Action3 --> USB["💾 外接隨身碟 / 異地保存"]
