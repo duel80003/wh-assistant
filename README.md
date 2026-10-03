@@ -381,9 +381,3 @@ WHassistant/
 ├── Dioxus.toml                 # Dioxus 專案配置
 └── package.json                # Tailwind CSS 開發依賴管理
 ```
-
----
-
-## 📄 授權條款 (License)
-
-本專案採用 [MIT License](LICENSE) 進行授權。
