@@ -160,11 +160,8 @@ impl UpdaterService {
 
 /// 比較兩個語意化版本號（例如 "0.2.0" 是否大於 "0.1.0"）
 fn is_newer_version(remote: &str, current: &str) -> bool {
-    let parse = |v: &str| -> Vec<u64> {
-        v.split(|c: char| c == '.' || c == '-')
-            .filter_map(|s| s.parse().ok())
-            .collect()
-    };
+    let parse =
+        |v: &str| -> Vec<u64> { v.split(['.', '-']).filter_map(|s| s.parse().ok()).collect() };
     parse(remote) > parse(current)
 }
 
