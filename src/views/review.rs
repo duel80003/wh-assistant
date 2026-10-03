@@ -5,7 +5,7 @@ use crate::db::Database;
 use crate::models::{PaymentTerm, Receipt};
 use crate::services::ollama::OllamaService;
 use crate::services::storage::StorageService;
-use crate::services::watcher::WatcherService;
+use crate::services::watcher::{DirectoryWatcherState, WatcherService};
 use crate::utils::{calculate_due_date, normalize_work_date};
 use crate::views::layout::RefreshBadges;
 
@@ -13,12 +13,16 @@ use crate::views::layout::RefreshBadges;
 pub fn ReviewView() -> Element {
     let db = use_context::<Database>();
     let refresh_badges = use_context::<RefreshBadges>();
+    let watcher_state = use_context::<Signal<DirectoryWatcherState>>();
     let mut receipts = use_signal(Vec::<Receipt>::new);
     let mut current_idx = use_signal(|| 0usize);
     let mut payment_terms = use_signal(Vec::<PaymentTerm>::new);
     let mut is_loading = use_signal(|| false);
     let mut status_message = use_signal(|| Option::<(String, bool)>::None); // (message, is_error)
     let mut duplicate_prompt = use_signal(|| Option::<PathBuf>::None);
+
+    // Track last loaded receipt ID to avoid overwriting user edits when list updates
+    let mut last_loaded_id = use_signal(|| Option::<i64>::None);
 
     // Form editing state for current receipt
     let mut form_no = use_signal(String::new);
@@ -53,26 +57,32 @@ pub fn ReviewView() -> Element {
         }
     };
 
-    // Load initial data
+    // Load data initially and automatically re-render & reload whenever refresh_badges triggers (e.g. background watcher task done)
     use_effect({
         let reload = reload_data.clone();
         move || {
+            let _ = refresh_badges.0();
             reload();
         }
     });
 
-    // Update form when current receipt changes
+    // Update form when current receipt changes or is loaded
     use_effect(move || {
         let list = receipts();
         let idx = current_idx();
         if let Some(r) = list.get(idx) {
-            form_no.set(r.no.map(|n| n.to_string()).unwrap_or_default());
-            form_matainer.set(r.matainer.clone().unwrap_or_default());
-            form_work_date.set(r.work_date.clone());
-            form_due_date.set(r.due_date.clone());
-            form_total_amount.set(r.total_amount);
-            form_term_id.set(r.payment_term_id);
-            zoom_scale.set(1.0);
+            if last_loaded_id() != Some(r.id) {
+                last_loaded_id.set(Some(r.id));
+                form_no.set(r.no.map(|n| n.to_string()).unwrap_or_default());
+                form_matainer.set(r.matainer.clone().unwrap_or_default());
+                form_work_date.set(r.work_date.clone());
+                form_due_date.set(r.due_date.clone());
+                form_total_amount.set(r.total_amount);
+                form_term_id.set(r.payment_term_id);
+                zoom_scale.set(1.0);
+            }
+        } else {
+            last_loaded_id.set(None);
         }
     });
 
@@ -265,6 +275,21 @@ pub fn ReviewView() -> Element {
                         span { class: "text-slate-500", "/" }
                         span { class: "font-mono text-slate-300", "{total_pending}" }
                     }
+                }
+            }
+
+            // Background Directory Watcher Working Tip
+            if let DirectoryWatcherState::Processing { filename, .. } = &*watcher_state.read() {
+                div { class: "bg-sky-950/40 border border-sky-500/40 rounded-xl p-3 px-4 flex items-center justify-between text-xs text-sky-300 shadow-sm animate-pulse",
+                    div { class: "flex items-center gap-2.5",
+                        div { class: "w-4 h-4 border-2 border-sky-400 border-t-transparent rounded-full animate-spin shrink-0" }
+                        span {
+                            "目錄監控正在背景辨識單據 "
+                            span { class: "font-mono font-bold text-white", "「{filename}」" }
+                            "（辨識完成後將自動為您刷新此頁面）..."
+                        }
+                    }
+                    span { class: "text-[11px] px-2 py-0.5 bg-sky-500/20 text-sky-300 rounded font-medium", "AI 模型運算中" }
                 }
             }
 

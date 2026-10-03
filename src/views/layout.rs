@@ -1,6 +1,7 @@
 use crate::db::Database;
 use crate::services::ollama::OllamaService;
 use crate::services::updater::{UpdateInfo, UpdateStatus, UpdaterService};
+use crate::services::watcher::{DirectoryWatcherState, WatcherEvent, WatcherService};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -25,6 +26,8 @@ pub fn AppShell() -> Element {
     let mut ollama_online = use_signal(|| false);
     let refresh_trigger = use_signal(|| 0u64);
 
+    let mut watcher_state = use_signal(DirectoryWatcherState::default);
+    use_context_provider(|| watcher_state);
     use_context_provider(|| RefreshBadges(refresh_trigger));
 
     let current_route = use_route::<Route>();
@@ -82,6 +85,104 @@ pub fn AppShell() -> Element {
                             .unwrap_or_else(|| "http://localhost:11434".to_string());
                         let online = OllamaService::test_connection(&url).await.is_ok();
                         ollama_online.set(online);
+                    }
+                }
+            });
+        }
+    });
+
+    // Background directory watcher event listener
+    use_hook({
+        let db = db.clone();
+        move || {
+            let db = db.clone();
+            spawn(async move {
+                // Initialize initial watcher state from DB
+                let enabled = db.get_setting("monitor_enabled").await.unwrap_or(None).unwrap_or_default() == "true";
+                let dir_str = db.get_setting("monitor_dir").await.unwrap_or(None).unwrap_or_default();
+                if enabled && !dir_str.is_empty() {
+                    watcher_state.set(DirectoryWatcherState::Idle { dir: dir_str });
+                } else {
+                    watcher_state.set(DirectoryWatcherState::Disabled);
+                }
+
+                let mut rx = WatcherService::subscribe();
+                while let Ok(event) = rx.recv().await {
+                    match event {
+                        WatcherEvent::TaskStarted { file_name, .. } => {
+                            let current_dir = match &*watcher_state.read() {
+                                DirectoryWatcherState::Idle { dir } => dir.clone(),
+                                DirectoryWatcherState::Processing { dir, .. } => dir.clone(),
+                                DirectoryWatcherState::Completed { dir, .. } => dir.clone(),
+                                DirectoryWatcherState::Failed { dir, .. } => dir.clone(),
+                                _ => String::new(),
+                            };
+                            watcher_state.set(DirectoryWatcherState::Processing {
+                                dir: current_dir,
+                                filename: file_name,
+                            });
+                        }
+                        WatcherEvent::TaskCompleted { file_name, receipt_no, .. } => {
+                            let current_dir = match &*watcher_state.read() {
+                                DirectoryWatcherState::Processing { dir, .. } => dir.clone(),
+                                DirectoryWatcherState::Idle { dir } => dir.clone(),
+                                DirectoryWatcherState::Completed { dir, .. } => dir.clone(),
+                                DirectoryWatcherState::Failed { dir, .. } => dir.clone(),
+                                _ => String::new(),
+                            };
+                            watcher_state.set(DirectoryWatcherState::Completed {
+                                dir: current_dir.clone(),
+                                filename: file_name,
+                                receipt_no,
+                            });
+
+                            // Immediate trigger for badge & active page rerender
+                            RefreshBadges(refresh_trigger).trigger();
+
+                            // Automatically revert to Idle after 5 seconds
+                            let current_dir_for_reset = current_dir.clone();
+                            spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                if matches!(&*watcher_state.read(), DirectoryWatcherState::Completed { .. }) {
+                                    watcher_state.set(DirectoryWatcherState::Idle { dir: current_dir_for_reset });
+                                }
+                            });
+                        }
+                        WatcherEvent::TaskFailed { file_name, error, .. } => {
+                            let current_dir = match &*watcher_state.read() {
+                                DirectoryWatcherState::Processing { dir, .. } => dir.clone(),
+                                DirectoryWatcherState::Idle { dir } => dir.clone(),
+                                DirectoryWatcherState::Completed { dir, .. } => dir.clone(),
+                                DirectoryWatcherState::Failed { dir, .. } => dir.clone(),
+                                _ => String::new(),
+                            };
+                            watcher_state.set(DirectoryWatcherState::Failed {
+                                dir: current_dir.clone(),
+                                filename: file_name,
+                                error,
+                            });
+
+                            // Immediate trigger for badge & active page rerender
+                            RefreshBadges(refresh_trigger).trigger();
+
+                            // Automatically revert to Idle after 8 seconds
+                            let current_dir_for_reset = current_dir.clone();
+                            spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+                                if matches!(&*watcher_state.read(), DirectoryWatcherState::Failed { .. }) {
+                                    watcher_state.set(DirectoryWatcherState::Idle { dir: current_dir_for_reset });
+                                }
+                            });
+                        }
+                        WatcherEvent::StatusChanged { enabled, dir } => {
+                            if enabled && !dir.is_empty() {
+                                if !matches!(&*watcher_state.read(), DirectoryWatcherState::Processing { .. }) {
+                                    watcher_state.set(DirectoryWatcherState::Idle { dir });
+                                }
+                            } else {
+                                watcher_state.set(DirectoryWatcherState::Disabled);
+                            }
+                        }
                     }
                 }
             });
@@ -183,6 +284,71 @@ pub fn AppShell() -> Element {
                             }
                         }
                     }
+
+                    // Directory Watcher Status Row
+                    match &*watcher_state.read() {
+                        DirectoryWatcherState::Disabled => rsx! {
+                            div { class: "flex items-center justify-between text-slate-400",
+                                span { "目錄監控：" }
+                                span { class: "flex items-center gap-1.5 text-slate-500 font-medium",
+                                    span { class: "w-2 h-2 rounded-full bg-slate-600" }
+                                    "未啟用"
+                                }
+                            }
+                        },
+                        DirectoryWatcherState::Idle { .. } => rsx! {
+                            div { class: "flex items-center justify-between text-slate-400",
+                                span { "目錄監控：" }
+                                span { class: "flex items-center gap-1.5 text-emerald-400 font-medium",
+                                    span { class: "w-2 h-2 rounded-full bg-emerald-400" }
+                                    "監控中"
+                                }
+                            }
+                        },
+                        DirectoryWatcherState::Processing { filename, .. } => rsx! {
+                            div { class: "flex flex-col gap-1 py-0.5",
+                                div { class: "flex items-center justify-between text-slate-400",
+                                    span { "目錄監控：" }
+                                    span { class: "flex items-center gap-1.5 text-sky-400 font-semibold animate-pulse",
+                                        span { class: "w-2 h-2 rounded-full bg-sky-400 animate-ping" }
+                                        "辨識處理中"
+                                    }
+                                }
+                                div { class: "text-[11px] text-sky-300 font-mono truncate px-1.5 py-0.5 bg-sky-950/40 rounded border border-sky-500/20",
+                                    "📄 {filename}"
+                                }
+                            }
+                        },
+                        DirectoryWatcherState::Completed { filename, .. } => rsx! {
+                            div { class: "flex flex-col gap-1 py-0.5",
+                                div { class: "flex items-center justify-between text-slate-400",
+                                    span { "目錄監控：" }
+                                    span { class: "flex items-center gap-1.5 text-emerald-400 font-medium",
+                                        span { class: "w-2 h-2 rounded-full bg-emerald-400" }
+                                        "已完成"
+                                    }
+                                }
+                                div { class: "text-[11px] text-emerald-400 font-mono truncate pl-1",
+                                    "✓ {filename}"
+                                }
+                            }
+                        },
+                        DirectoryWatcherState::Failed { filename, .. } => rsx! {
+                            div { class: "flex flex-col gap-1 py-0.5",
+                                div { class: "flex items-center justify-between text-slate-400",
+                                    span { "目錄監控：" }
+                                    span { class: "flex items-center gap-1.5 text-rose-400 font-medium",
+                                        span { class: "w-2 h-2 rounded-full bg-rose-400" }
+                                        "失敗"
+                                    }
+                                }
+                                div { class: "text-[11px] text-rose-400 font-mono truncate pl-1",
+                                    "✕ {filename}"
+                                }
+                            }
+                        },
+                    }
+
                     div { class: "flex items-center justify-between text-slate-500 text-[11px]",
                         span { "版本" }
                         span { class: "font-mono", "v{env!(\"CARGO_PKG_VERSION\")} (繁體)" }
@@ -228,6 +394,73 @@ pub fn AppShell() -> Element {
                 }
 
                 Outlet::<Route> {}
+
+                // Floating Directory Watcher Background Task Tip Banner
+                match &*watcher_state.read() {
+                    DirectoryWatcherState::Processing { filename, .. } => rsx! {
+                        div {
+                            class: "fixed bottom-6 right-6 z-40 max-w-sm bg-slate-900/95 border border-sky-500/50 rounded-xl p-3.5 shadow-2xl backdrop-blur-md flex items-center gap-3 animate-in fade-in slide-in-from-bottom-3 duration-200 pointer-events-auto",
+                            div { class: "w-5 h-5 border-2 border-sky-400 border-t-transparent rounded-full animate-spin shrink-0" }
+                            div { class: "flex flex-col gap-0.5 min-w-0 flex-1",
+                                div { class: "flex items-center gap-2",
+                                    span { class: "text-xs font-bold text-sky-400", "目錄監控背景作業中" }
+                                    span { class: "text-[10px] px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 font-medium animate-pulse", "AI 辨識中" }
+                                }
+                                span { class: "text-xs text-slate-300 font-mono truncate", "正在辨識：{filename}" }
+                            }
+                        }
+                    },
+                    DirectoryWatcherState::Completed { filename, receipt_no, dir } => {
+                        let dir = dir.clone();
+                        rsx! {
+                            div {
+                                class: "fixed bottom-6 right-6 z-40 max-w-sm bg-slate-900/95 border border-emerald-500/50 rounded-xl p-3.5 shadow-2xl backdrop-blur-md flex items-center gap-3 animate-in fade-in slide-in-from-bottom-3 duration-200 pointer-events-auto",
+                                div { class: "w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs shrink-0", "✓" }
+                                div { class: "flex flex-col gap-0.5 min-w-0 flex-1",
+                                    span { class: "text-xs font-bold text-emerald-400", "目錄監控：單據辨識完成" }
+                                    span { class: "text-xs text-slate-300 font-mono truncate",
+                                        if let Some(no) = receipt_no {
+                                            "「{filename}」(工單 #{no}) 已存入待審清單"
+                                        } else {
+                                            "「{filename}」已成功存入待審清單"
+                                        }
+                                    }
+                                }
+                                button {
+                                    class: "text-slate-400 hover:text-white text-xs px-1.5 py-1 cursor-pointer",
+                                    onclick: {
+                                        let dir = dir.clone();
+                                        move |_| watcher_state.set(DirectoryWatcherState::Idle { dir: dir.clone() })
+                                    },
+                                    "✕"
+                                }
+                            }
+                        }
+                    },
+                    DirectoryWatcherState::Failed { filename, error, dir } => {
+                        let dir = dir.clone();
+                        rsx! {
+                            div {
+                                class: "fixed bottom-6 right-6 z-40 max-w-sm bg-slate-900/95 border border-rose-500/50 rounded-xl p-3.5 shadow-2xl backdrop-blur-md flex items-center gap-3 animate-in fade-in slide-in-from-bottom-3 duration-200 pointer-events-auto",
+                                div { class: "w-6 h-6 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center font-bold text-xs shrink-0", "✕" }
+                                div { class: "flex flex-col gap-0.5 min-w-0 flex-1",
+                                    span { class: "text-xs font-bold text-rose-400", "目錄監控：單據辨識失敗" }
+                                    span { class: "text-xs text-slate-300 font-mono truncate", "檔案：{filename}" }
+                                    span { class: "text-[11px] text-rose-400/80 truncate", "{error}" }
+                                }
+                                button {
+                                    class: "text-slate-400 hover:text-white text-xs px-1.5 py-1 cursor-pointer",
+                                    onclick: {
+                                        let dir = dir.clone();
+                                        move |_| watcher_state.set(DirectoryWatcherState::Idle { dir: dir.clone() })
+                                    },
+                                    "✕"
+                                }
+                            }
+                        }
+                    },
+                    _ => rsx! {},
+                }
 
                 // In-App Self-Update Modal Dialog
                 if show_update_modal() {

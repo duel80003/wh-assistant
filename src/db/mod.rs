@@ -625,6 +625,16 @@ impl Database {
         Ok(count.0 > 0)
     }
 
+    pub async fn is_file_hash_recorded(&self, hash: &str) -> Result<bool> {
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM processed_files WHERE file_hash = ?",
+        )
+        .bind(hash)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count.0 > 0)
+    }
+
     pub async fn record_processed_file(&self, pf: &ProcessedFile) -> Result<()> {
         sqlx::query(
             r#"
@@ -983,5 +993,33 @@ mod tests {
 
         // Clean up
         db.delete_receipt(id).await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_file_hash_recorded() {
+        let db = Database::init().await.expect("Failed to init DB");
+        let hash = format!("test_hash_{}", chrono::Local::now().timestamp_nanos_opt().unwrap_or(0));
+
+        assert!(!db.is_file_hash_recorded(&hash).await.unwrap());
+
+        let pf = ProcessedFile {
+            id: 0,
+            file_path: "/tmp/sample.png".to_string(),
+            file_hash: hash.clone(),
+            file_size: 1024,
+            receipt_id: None,
+            status: "failed".to_string(),
+            error_message: Some("test error".to_string()),
+            processed_at: chrono::Local::now().to_rfc3339(),
+        };
+        db.record_processed_file(&pf).await.unwrap();
+
+        assert!(db.is_file_hash_recorded(&hash).await.unwrap());
+
+        // Clean up
+        let _ = sqlx::query("DELETE FROM processed_files WHERE file_hash = ?")
+            .bind(&hash)
+            .execute(&db.pool)
+            .await;
     }
 }

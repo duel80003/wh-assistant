@@ -35,6 +35,7 @@ pub fn OverdueView() -> Element {
     use_effect({
         let reload = reload.clone();
         move || {
+            let _ = refresh_badges.0();
             reload();
         }
     });

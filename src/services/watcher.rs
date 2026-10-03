@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Local;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::db::Database;
 use crate::models::{ProcessedFile, Receipt};
@@ -13,9 +13,83 @@ use crate::services::ollama::OllamaService;
 use crate::services::storage::StorageService;
 use crate::utils::{calculate_due_date, normalize_work_date};
 
+/// High-level Directory Watcher UI State
+#[derive(Debug, Clone, PartialEq)]
+pub enum DirectoryWatcherState {
+    Disabled,
+    Idle {
+        dir: String,
+    },
+    Processing {
+        dir: String,
+        filename: String,
+    },
+    Completed {
+        dir: String,
+        filename: String,
+        receipt_no: Option<i64>,
+    },
+    Failed {
+        dir: String,
+        filename: String,
+        error: String,
+    },
+}
+
+impl Default for DirectoryWatcherState {
+    fn default() -> Self {
+        Self::Disabled
+    }
+}
+
+/// Directory Watcher Event sent from background tasks to UI
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub enum WatcherEvent {
+    TaskStarted {
+        file_path: String,
+        file_name: String,
+    },
+    TaskCompleted {
+        file_path: String,
+        file_name: String,
+        receipt_id: i64,
+        receipt_no: Option<i64>,
+    },
+    TaskFailed {
+        file_path: String,
+        file_name: String,
+        error: String,
+    },
+    StatusChanged {
+        enabled: bool,
+        dir: String,
+    },
+}
+
+static WATCHER_BUS: OnceLock<broadcast::Sender<WatcherEvent>> = OnceLock::new();
+
 pub struct WatcherService;
 
 impl WatcherService {
+    /// Global watcher broadcast event bus
+    pub fn bus() -> &'static broadcast::Sender<WatcherEvent> {
+        WATCHER_BUS.get_or_init(|| {
+            let (tx, _) = broadcast::channel(128);
+            tx
+        })
+    }
+
+    /// Subscribe to background watcher events
+    pub fn subscribe() -> broadcast::Receiver<WatcherEvent> {
+        Self::bus().subscribe()
+    }
+
+    /// Emit an event onto the watcher broadcast bus
+    pub fn emit(event: WatcherEvent) {
+        let _ = Self::bus().send(event);
+    }
+
     /// Supported image extensions for receipts
     pub fn is_supported_image(path: &Path) -> bool {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -28,6 +102,16 @@ impl WatcherService {
 
     /// Process a single image file (shared between drag-and-drop / manual pick and directory watcher)
     pub async fn process_image_file(db: &Database, file_path: &Path, force: bool) -> Result<i64> {
+        let (receipt_id, _) = Self::process_image_file_with_details(db, file_path, force).await?;
+        Ok(receipt_id)
+    }
+
+    /// Process single image file returning (receipt_id, receipt_no)
+    pub async fn process_image_file_with_details(
+        db: &Database,
+        file_path: &Path,
+        force: bool,
+    ) -> Result<(i64, Option<i64>)> {
         let (saved_filename, hash, size) = StorageService::copy_image_from_file(file_path)?;
 
         // Deduplication check (skipped if user explicitly chose to force proceed)
@@ -117,11 +201,76 @@ impl WatcherService {
                 };
                 db.record_processed_file(&pf).await?;
 
-                Ok(receipt_id)
+                Ok((receipt_id, Some(receipt_no)))
             }
             Err(e) => {
                 StorageService::delete_image_file(&saved_filename).ok();
                 anyhow::bail!("Ollama 辨識失敗: {:#}", e);
+            }
+        }
+    }
+
+    /// Process a file discovered by directory watcher
+    async fn process_watched_file(db: &Database, path: &Path) {
+        if !path.exists() || !Self::is_supported_image(path) {
+            return;
+        }
+
+        // Deduplication check: compute hash from file bytes directly before copying or triggering events
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let hash = StorageService::compute_sha256(&bytes);
+
+        // If file hash has already been recorded in processed_files (success or previously recorded failure), skip
+        if let Ok(true) = db.is_file_hash_recorded(&hash).await {
+            return;
+        }
+
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("單據圖片")
+            .to_string();
+        let path_str = path.to_string_lossy().to_string();
+
+        // Notify UI that a background task has started
+        Self::emit(WatcherEvent::TaskStarted {
+            file_path: path_str.clone(),
+            file_name: file_name.clone(),
+        });
+
+        // Run recognition and store receipt
+        match Self::process_image_file_with_details(db, path, false).await {
+            Ok((receipt_id, receipt_no)) => {
+                Self::emit(WatcherEvent::TaskCompleted {
+                    file_path: path_str,
+                    file_name,
+                    receipt_id,
+                    receipt_no,
+                });
+            }
+            Err(e) => {
+                let err_msg = format!("{:#}", e);
+                // Record into processed_files so background watcher does not repeatedly retry corrupt/unsupported images
+                let pf = ProcessedFile {
+                    id: 0,
+                    file_path: path_str.clone(),
+                    file_hash: hash,
+                    file_size: bytes.len() as i64,
+                    receipt_id: None,
+                    status: "failed".to_string(),
+                    error_message: Some(err_msg.clone()),
+                    processed_at: Local::now().to_rfc3339(),
+                };
+                let _ = db.record_processed_file(&pf).await;
+
+                Self::emit(WatcherEvent::TaskFailed {
+                    file_path: path_str,
+                    file_name,
+                    error: err_msg,
+                });
             }
         }
     }
@@ -131,6 +280,9 @@ impl WatcherService {
         db: Database,
         shutdown_signal: Arc<AtomicBool>,
     ) {
+        let mut last_enabled: Option<bool> = None;
+        let mut last_dir = String::new();
+
         loop {
             if shutdown_signal.load(Ordering::Relaxed) {
                 break;
@@ -140,10 +292,19 @@ impl WatcherService {
             let enabled = db.get_setting("monitor_enabled").await.unwrap_or(None).unwrap_or_default() == "true";
             let dir_str = db.get_setting("monitor_dir").await.unwrap_or(None).unwrap_or_default();
 
+            if last_enabled != Some(enabled) || last_dir != dir_str {
+                last_enabled = Some(enabled);
+                last_dir = dir_str.clone();
+                Self::emit(WatcherEvent::StatusChanged {
+                    enabled,
+                    dir: dir_str.clone(),
+                });
+            }
+
             if enabled && !dir_str.is_empty() {
                 let watch_path = PathBuf::from(&dir_str);
                 if watch_path.is_dir() {
-                    // Initial scan of directory
+                    // Initial / periodic scan of directory
                     Self::scan_directory(&db, &watch_path).await;
 
                     // Setup file watcher channel
@@ -166,8 +327,8 @@ impl WatcherService {
 
                     if let Ok(mut watcher) = watcher_res {
                         if watcher.watch(&watch_path, RecursiveMode::NonRecursive).is_ok() {
-                            // Listen to events for up to 10 seconds before re-checking settings
-                            let timeout = tokio::time::sleep(Duration::from_secs(10));
+                            // Listen to events for up to 8 seconds before re-checking settings
+                            let timeout = tokio::time::sleep(Duration::from_secs(8));
                             tokio::pin!(timeout);
 
                             loop {
@@ -179,7 +340,7 @@ impl WatcherService {
                                         // Wait 500ms for file write to complete
                                         tokio::time::sleep(Duration::from_millis(500)).await;
                                         if path.exists() {
-                                            let _ = Self::process_image_file(&db, &path, false).await;
+                                            Self::process_watched_file(&db, &path).await;
                                         }
                                     }
                                 }
@@ -189,7 +350,7 @@ impl WatcherService {
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            tokio::time::sleep(Duration::from_secs(4)).await;
         }
     }
 
@@ -198,9 +359,43 @@ impl WatcherService {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_file() && Self::is_supported_image(&path) {
-                    let _ = Self::process_image_file(db, &path, false).await;
+                    Self::process_watched_file(db, &path).await;
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_supported_image() {
+        assert!(WatcherService::is_supported_image(Path::new("receipt.png")));
+        assert!(WatcherService::is_supported_image(Path::new("RECEIPT.JPG")));
+        assert!(WatcherService::is_supported_image(Path::new("receipt.jpeg")));
+        assert!(WatcherService::is_supported_image(Path::new("receipt.webp")));
+        assert!(!WatcherService::is_supported_image(Path::new("receipt.pdf")));
+        assert!(!WatcherService::is_supported_image(Path::new("receipt.txt")));
+        assert!(!WatcherService::is_supported_image(Path::new("no_extension")));
+    }
+
+    #[tokio::test]
+    async fn test_watcher_event_bus() {
+        let mut rx = WatcherService::subscribe();
+
+        WatcherService::emit(WatcherEvent::TaskStarted {
+            file_path: "/tmp/test.png".to_string(),
+            file_name: "test.png".to_string(),
+        });
+
+        let received = rx.recv().await.expect("Failed to receive event");
+        match received {
+            WatcherEvent::TaskStarted { file_name, .. } => {
+                assert_eq!(file_name, "test.png");
+            }
+            _ => panic!("Unexpected event received"),
         }
     }
 }

@@ -81,10 +81,11 @@ pub fn HistoryView() -> Element {
         }
     };
 
-    // Load initial data on mount
+    // Load initial data on mount and on badge/task refresh
     use_effect({
         let fetch_data = fetch_data.clone();
         move || {
+            let _ = refresh_badges.0();
             fetch_data(1, keyword(), payment_status_filter(), start_date(), end_date());
         }
     });

@@ -6,6 +6,7 @@ use crate::models::PaymentTerm;
 use crate::services::ollama::OllamaService;
 use crate::services::storage::StorageService;
 use crate::services::updater::{UpdateInfo, UpdateStatus, UpdaterService};
+use crate::services::watcher::{WatcherEvent, WatcherService};
 
 #[component]
 pub fn SettingsView() -> Element {
@@ -86,6 +87,10 @@ pub fn SettingsView() -> Element {
                 let _ = db.set_setting("monitor_dir", &monitor_dir()).await;
                 let _ = db.set_setting("monitor_enabled", if monitor_enabled() { "true" } else { "false" }).await;
                 let _ = db.set_setting("retention_days", &retention_days()).await;
+                WatcherService::emit(WatcherEvent::StatusChanged {
+                    enabled: monitor_enabled(),
+                    dir: monitor_dir(),
+                });
                 save_notice.set(Some("✓ 系統設定已成功儲存！".to_string()));
             });
         }
