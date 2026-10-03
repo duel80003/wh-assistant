@@ -33,6 +33,9 @@ pub fn HistoryView() -> Element {
     // Image preview modal (full view)
     let mut preview_image_url = use_signal(|| Option::<String>::None);
 
+    // Delete confirmation modal state
+    let mut receipt_to_delete = use_signal(|| Option::<Receipt>::None);
+
     // Reactive data fetcher
     use_effect({
         let db = db.clone();
@@ -315,15 +318,9 @@ pub fn HistoryView() -> Element {
                                                     class: "px-2 py-1 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded text-xs transition-colors cursor-pointer",
                                                     title: "刪除單據",
                                                     onclick: {
-                                                        let db = db.clone();
                                                         let item = receipt_for_delete.clone();
                                                         move |_| {
-                                                            let db = db.clone();
-                                                            let id = item.id;
-                                                            spawn(async move {
-                                                                let _ = db.delete_receipt(id).await;
-                                                                *reload_trigger.write() += 1;
-                                                            });
+                                                            receipt_to_delete.set(Some(item.clone()));
                                                         }
                                                     },
                                                     "🗑"
@@ -519,6 +516,69 @@ pub fn HistoryView() -> Element {
                     div { class: "relative max-w-4xl max-h-[85vh] overflow-hidden",
                         if let Some(url) = StorageService::read_image_as_data_url(&img_name) {
                             img { src: "{url}", class: "max-h-[85vh] max-w-full object-contain rounded-lg shadow-2xl", alt: "工單大圖" }
+                        }
+                    }
+                }
+            }
+
+            // Delete Confirmation Modal
+            if let Some(item) = receipt_to_delete() {
+                div {
+                    class: "fixed inset-0 bg-black/80 backdrop-blur-xs z-50 flex items-center justify-center p-4",
+                    div {
+                        class: "bg-slate-900 border border-rose-500/40 rounded-xl p-6 max-w-md w-full shadow-2xl flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150",
+                        div { class: "flex items-center gap-3 text-rose-400 font-semibold text-base",
+                            span { class: "text-2xl", "🗑️" }
+                            span { "確認刪除單據" }
+                        }
+                        div { class: "flex flex-col gap-2 text-sm text-slate-300",
+                            p { "您確定要刪除此筆工單紀錄及關聯圖片檔案嗎？此操作無法復原。" }
+                            div { class: "p-3 bg-slate-950 rounded-lg border border-slate-800 text-xs font-mono flex flex-col gap-1.5 text-slate-400",
+                                div { class: "flex justify-between",
+                                    span { class: "text-slate-500 font-sans", "工單號碼:" }
+                                    span { class: "text-slate-200 font-semibold", "{item.no.map(|n| n.to_string()).unwrap_or_else(|| \"-\".to_string())}" }
+                                }
+                                div { class: "flex justify-between",
+                                    span { class: "text-slate-500 font-sans", "施工人員:" }
+                                    span { class: "text-slate-200 font-sans", "{item.matainer.as_deref().unwrap_or(\"-\")}" }
+                                }
+                                div { class: "flex justify-between",
+                                    span { class: "text-slate-500 font-sans", "施工日期:" }
+                                    span { class: "text-slate-200", "{item.work_date}" }
+                                }
+                                div { class: "flex justify-between",
+                                    span { class: "text-slate-500 font-sans", "工單金額:" }
+                                    span { class: "text-slate-200 tabular-nums", "NT$ {item.total_amount:0.0}" }
+                                }
+                                if item.payment_status == "unpaid" {
+                                    div { class: "text-amber-400 font-sans font-medium mt-1 pt-1.5 border-t border-slate-800/80 flex items-center gap-1",
+                                        "⚠️ 注意：此工單尚未收費！"
+                                    }
+                                }
+                            }
+                        }
+                        div { class: "flex justify-end gap-3 pt-3 border-t border-slate-800",
+                            button {
+                                class: "px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer",
+                                onclick: move |_| receipt_to_delete.set(None),
+                                "取消"
+                            }
+                            button {
+                                class: "px-4 py-2 text-xs font-medium text-white bg-rose-600 hover:bg-rose-500 rounded-lg shadow transition-colors cursor-pointer",
+                                onclick: {
+                                    let db = db.clone();
+                                    let id = item.id;
+                                    move |_| {
+                                        let db = db.clone();
+                                        receipt_to_delete.set(None);
+                                        spawn(async move {
+                                            let _ = db.delete_receipt(id).await;
+                                            *reload_trigger.write() += 1;
+                                        });
+                                    }
+                                },
+                                "確定刪除"
+                            }
                         }
                     }
                 }
