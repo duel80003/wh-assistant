@@ -151,6 +151,25 @@
    ```
    編譯完成之執行檔位於 `target/release/w-hassistant`。
 
+4. **打包 macOS 桌面應用程式 (`.app` / `.dmg`)**：
+   使用 Dioxus CLI 將應用程式連同專屬圖示（`assets/mac.icns`）打包為 macOS 原生 App Bundle：
+   ```bash
+   # 確保 Tailwind CSS 樣式最新
+   npm run build:css
+
+   # 執行 macOS 發行版打包
+   dx bundle --platform macos --release
+   ```
+   * **本機快速測試與開啟**：
+     ```bash
+     open $(find target -name "WHassistant.app" -type d | head -n 1)
+     ```
+   * **製作 macOS `.dmg` 安裝磁碟映像檔 (選用)**：
+     ```bash
+     APP_PATH=$(find target -name "WHassistant.app" -type d | head -n 1)
+     hdiutil create -volname "WHassistant" -srcfolder "$APP_PATH" -ov -format UDZO WHassistant-mac.dmg
+     ```
+
 ---
 
 ### Tailwind CSS 樣式即時編譯 (選用)
