@@ -106,6 +106,21 @@ fn App() -> Element {
         } else if let Some(db) = db_signal() {
             {
                 use_context_provider(|| db);
+
+                let mut update_info = use_signal(services::updater::UpdateInfo::default);
+                let update_status = use_signal(|| services::updater::UpdateStatus::Idle);
+                use_context_provider(|| update_info);
+                use_context_provider(|| update_status);
+
+                // Background check for latest release on app launch
+                use_hook(move || {
+                    spawn(async move {
+                        if let Ok(Some(info)) = services::updater::UpdaterService::check_for_updates().await {
+                            update_info.set(info);
+                        }
+                    });
+                });
+
                 rsx! {
                     Router::<Route> {}
                 }

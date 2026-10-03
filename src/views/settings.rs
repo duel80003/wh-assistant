@@ -5,11 +5,18 @@ use crate::db::Database;
 use crate::models::PaymentTerm;
 use crate::services::ollama::OllamaService;
 use crate::services::storage::StorageService;
+use crate::services::updater::{UpdateInfo, UpdateStatus, UpdaterService};
 
 #[component]
 pub fn SettingsView() -> Element {
     let db = use_context::<Database>();
     let mut payment_terms = use_signal(Vec::<PaymentTerm>::new);
+
+    // Update signals
+    let mut update_info = use_context::<Signal<UpdateInfo>>();
+    let mut update_status = use_context::<Signal<UpdateStatus>>();
+    let mut is_checking_update = use_signal(|| false);
+    let mut manual_check_notice = use_signal(|| Option::<String>::None);
 
     // Settings fields
     let mut ollama_url = use_signal(|| "http://localhost:11434".to_string());
@@ -417,6 +424,99 @@ pub fn SettingsView() -> Element {
                         class: "px-4 py-2 bg-rose-600/10 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-semibold rounded-lg transition-colors cursor-pointer",
                         onclick: move |_| show_cleanup_confirm_modal.set(true),
                         "🧹 立即清理已收費過期單據"
+                    }
+                }
+            }
+
+            // Section 6: 軟體版本與熱更新 (Software Version & Hot Update)
+            div { class: "bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm flex flex-col gap-4",
+                div { class: "border-b border-slate-800 pb-3",
+                    h2 { class: "text-sm font-semibold text-slate-100", "軟體版本與線上熱更新 (Software Updates)" }
+                    p { class: "text-xs text-slate-400 mt-0.5",
+                        "串接 GitHub Releases 官方發布庫 (duel80003/wh-assistant)，支援背景探測與一鍵就地熱替換。"
+                    }
+                }
+
+                if let Some(msg) = manual_check_notice() {
+                    div { class: "px-4 py-3 rounded-lg bg-indigo-950/40 border border-indigo-800 text-indigo-300 text-xs flex items-center justify-between",
+                        span { "{msg}" }
+                        button {
+                            class: "text-slate-400 hover:text-white text-xs cursor-pointer",
+                            onclick: move |_| manual_check_notice.set(None),
+                            "✕"
+                        }
+                    }
+                }
+
+                div { class: "flex items-center justify-between bg-slate-950 p-4 rounded-xl border border-slate-800",
+                    div { class: "flex flex-col gap-1",
+                        div { class: "flex items-center gap-2",
+                            span { class: "text-xs text-slate-400", "目前版本：" }
+                            span { class: "text-xs font-mono font-bold text-slate-200", "v{env!(\"CARGO_PKG_VERSION\")}" }
+                        }
+                        div { class: "flex items-center gap-2",
+                            span { class: "text-xs text-slate-400", "最新發布：" }
+                            if update_info().has_update {
+                                span { class: "text-xs font-mono font-bold text-emerald-400", "{update_info().latest_version} (有新版本！)" }
+                            } else {
+                                span { class: "text-xs font-mono text-slate-400", "目前已是最新版本" }
+                            }
+                        }
+                    }
+
+                    div { class: "flex items-center gap-3",
+                        button {
+                            disabled: is_checking_update(),
+                            class: "px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 disabled:opacity-50 transition-colors cursor-pointer",
+                            onclick: move |_| {
+                                is_checking_update.set(true);
+                                spawn(async move {
+                                    match UpdaterService::check_for_updates().await {
+                                        Ok(Some(info)) => {
+                                            update_info.set(info);
+                                            manual_check_notice.set(Some("檢測完成：發現新版本！".to_string()));
+                                        }
+                                        Ok(None) => {
+                                            manual_check_notice.set(Some("檢測完成：目前已是最新版本，無需更新。".to_string()));
+                                        }
+                                        Err(e) => {
+                                            manual_check_notice.set(Some(format!("檢查更新失敗: {:#}", e)));
+                                        }
+                                    }
+                                    is_checking_update.set(false);
+                                });
+                            },
+                            if is_checking_update() { "檢查中..." } else { "🔍 檢查更新" }
+                        }
+
+                        if update_info().has_update {
+                            button {
+                                class: "px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer animate-pulse",
+                                onclick: {
+                                    let dl_url = update_info().download_url.clone();
+                                    move |_| {
+                                        if let Some(ref url) = dl_url {
+                                            let url = url.clone();
+                                            update_status.set(UpdateStatus::Downloading { progress: 0 });
+                                            spawn(async move {
+                                                update_status.set(UpdateStatus::Extracting);
+                                                match UpdaterService::download_and_install_update(&url).await {
+                                                    Ok(()) => {
+                                                        update_status.set(UpdateStatus::ReadyToRestart);
+                                                        manual_check_notice.set(Some("更新成功安裝！請重啟應用程式以生效。".to_string()));
+                                                    }
+                                                    Err(e) => {
+                                                        update_status.set(UpdateStatus::Failed(format!("{:#}", e)));
+                                                        manual_check_notice.set(Some(format!("更新失敗: {:#}", e)));
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                },
+                                "🚀 立即熱更新 (Self-Update)"
+                            }
+                        }
                     }
                 }
             }

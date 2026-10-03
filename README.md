@@ -251,6 +251,20 @@ python3 scripts/seed_fake_data.py
 
 ---
 
+## 🚀 應用程式熱更新機制 (In-App Self-Updater)
+
+本軟體整合了針對 GitHub 儲存庫（[`duel80003/wh-assistant`](https://github.com/duel80003/wh-assistant)）的**自動版本檢查與就地熱替換（Self-Updating）**功能：
+
+1. **背景非同步探測**：
+   - 應用程式啟動時，會自動透過 GitHub REST API 比對本地版本（`CARGO_PKG_VERSION`）與最新 Release Tag（如 `v0.2.0`）。
+2. **即時 UI 提示**：
+   - 當發現新版本時，左側邊欄將浮現呼吸動態更新徽章，主工作區頂部亦會顯示版本提示橫幅，展示新版本號與 Release Notes。
+3. **一鍵無縫熱替換 (Self-Update)**：
+   - 使用者點擊【立即更新】➔【開始自動更新】後，系統將在背景下載最新 Windows 壓縮包、解壓縮並利用 Windows 執行檔重命名（`rename old -> copy new`）機制完成熱替換。
+   - 完成後顯示【立即重啟應用程式】，點擊即可直接重啟進入新版系統，無需手動重新下載解壓或手動安裝！
+
+---
+
 ## 📂 專案目錄結構 (Project Layout)
 
 ```text

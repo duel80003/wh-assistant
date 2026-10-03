@@ -40,6 +40,18 @@ jobs:
       - name: Compile Tailwind CSS
         run: npx @tailwindcss/cli -i ./tailwind.css -o ./assets/tailwind.css
 
+      - name: Sync Cargo.toml version with Git Tag
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG_VER="${GITHUB_REF_NAME#v}"
+            echo "Detected Git Tag: $GITHUB_REF_NAME, updating Cargo.toml version to $TAG_VER"
+            sed -i.bak -E '0,/^version = ".*"/s/^version = ".*"/version = "'"$TAG_VER"'"/' Cargo.toml
+            rm -f Cargo.toml.bak
+            echo "--- Updated Cargo.toml ---"
+            head -n 6 Cargo.toml
+          fi
+
       - name: Install Dioxus CLI (dx)
         uses: taiki-e/install-action@v2
         with:

@@ -1,5 +1,6 @@
 use crate::db::Database;
 use crate::services::ollama::OllamaService;
+use crate::services::updater::{UpdateInfo, UpdateStatus, UpdaterService};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -15,6 +16,10 @@ impl RefreshBadges {
 #[component]
 pub fn AppShell() -> Element {
     let db = use_context::<Database>();
+    let mut update_info = use_context::<Signal<UpdateInfo>>();
+    let mut update_status = use_context::<Signal<UpdateStatus>>();
+    let mut show_update_modal = use_signal(|| false);
+
     let mut unconfirmed_count = use_signal(|| 0i64);
     let mut overdue_count = use_signal(|| 0i64);
     let mut ollama_online = use_signal(|| false);
@@ -180,14 +185,166 @@ pub fn AppShell() -> Element {
                     }
                     div { class: "flex items-center justify-between text-slate-500 text-[11px]",
                         span { "版本" }
-                        span { class: "font-mono", "v0.1.0 (繁體)" }
+                        span { class: "font-mono", "v{env!(\"CARGO_PKG_VERSION\")} (繁體)" }
+                    }
+
+                    if update_info().has_update {
+                        button {
+                            class: "mt-1 w-full flex items-center justify-center gap-1.5 py-1.5 px-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 border border-indigo-500/30 rounded-lg text-xs font-medium transition-colors cursor-pointer animate-pulse",
+                            onclick: move |_| show_update_modal.set(true),
+                            span { "🚀" }
+                            span { "新版本 {update_info().latest_version}" }
+                        }
                     }
                 }
             }
 
             // Main Content Area (Auto-scroll)
-            main { class: "flex-1 h-screen overflow-y-auto bg-slate-950 p-6 flex flex-col",
+            main { class: "flex-1 h-screen overflow-y-auto bg-slate-950 p-6 flex flex-col relative",
+                // Top Update Alert Bar (if update available)
+                if update_info().has_update {
+                    div { class: "mb-4 bg-gradient-to-r from-indigo-950/80 via-slate-900 to-indigo-950/80 border border-indigo-500/40 rounded-xl p-3 px-4 flex items-center justify-between shadow-lg text-xs",
+                        div { class: "flex items-center gap-2.5",
+                            span { class: "text-base", "🎉" }
+                            span { class: "text-slate-200",
+                                "發現最新版本 "
+                                span { class: "font-mono font-bold text-indigo-400", "{update_info().latest_version}" }
+                                "（目前版本 v{env!(\"CARGO_PKG_VERSION\")}），支援熱替換自動更新！"
+                            }
+                        }
+                        div { class: "flex items-center gap-2",
+                            button {
+                                class: "px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg shadow-sm transition-colors cursor-pointer",
+                                onclick: move |_| show_update_modal.set(true),
+                                "立即更新"
+                            }
+                            button {
+                                class: "text-slate-400 hover:text-slate-200 px-1.5 py-1 cursor-pointer",
+                                onclick: move |_| update_info.write().has_update = false,
+                                "✕"
+                            }
+                        }
+                    }
+                }
+
                 Outlet::<Route> {}
+
+                // In-App Self-Update Modal Dialog
+                if show_update_modal() {
+                    div { class: "fixed inset-0 bg-black/80 backdrop-blur-xs z-50 flex items-center justify-center p-4",
+                        div { class: "bg-slate-900 border border-indigo-500/40 rounded-2xl max-w-lg w-full p-6 shadow-2xl flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150",
+                            div { class: "flex items-center justify-between border-b border-slate-800 pb-3",
+                                div { class: "flex items-center gap-2",
+                                    span { class: "text-xl", "🚀" }
+                                    h3 { class: "text-base font-bold text-slate-100", "軟體更新 - {update_info().latest_version}" }
+                                }
+                                if *update_status.read() == UpdateStatus::Idle || matches!(*update_status.read(), UpdateStatus::Failed(_)) {
+                                    button {
+                                        class: "text-slate-400 hover:text-white text-lg font-bold cursor-pointer",
+                                        onclick: move |_| show_update_modal.set(false),
+                                        "✕"
+                                    }
+                                }
+                            }
+
+                            div { class: "flex flex-col gap-2.5 text-xs text-slate-300",
+                                div { class: "p-3 bg-slate-950 border border-slate-800 rounded-lg flex flex-col gap-1.5 font-mono",
+                                    div { class: "flex justify-between",
+                                        span { class: "text-slate-500 font-sans", "目前版本：" }
+                                        span { class: "text-slate-300", "v{env!(\"CARGO_PKG_VERSION\")}" }
+                                    }
+                                    div { class: "flex justify-between",
+                                        span { class: "text-slate-500 font-sans", "最新發布：" }
+                                        span { class: "text-indigo-400 font-bold", "{update_info().latest_version}" }
+                                    }
+                                }
+
+                                if !update_info().release_notes.is_empty() {
+                                    div { class: "flex flex-col gap-1",
+                                        span { class: "text-slate-400 font-semibold", "更新說明 (Release Notes)：" }
+                                        div { class: "p-2.5 bg-slate-950/70 border border-slate-800 rounded-lg max-h-36 overflow-y-auto text-slate-300 whitespace-pre-wrap leading-relaxed",
+                                            "{update_info().release_notes}"
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Dynamic status indicator during update
+                            match update_status() {
+                                UpdateStatus::Idle => rsx! {
+                                    div { class: "text-slate-400 text-xs", "點擊下方【開始更新】後，系統將自動從 GitHub 下載最新檔案並完成就地熱替換。" }
+                                },
+                                UpdateStatus::Downloading { .. } => rsx! {
+                                    div { class: "flex items-center gap-3 p-3 bg-indigo-950/30 border border-indigo-500/20 rounded-lg",
+                                        div { class: "w-5 h-5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin shrink-0" }
+                                        span { class: "text-xs text-indigo-300", "正在自 GitHub 下載更新壓縮包..." }
+                                    }
+                                },
+                                UpdateStatus::Extracting => rsx! {
+                                    div { class: "flex items-center gap-3 p-3 bg-indigo-950/30 border border-indigo-500/20 rounded-lg",
+                                        div { class: "w-5 h-5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin shrink-0" }
+                                        span { class: "text-xs text-indigo-300", "正在解壓並進行就地熱替換 (Self-Updating)..." }
+                                    }
+                                },
+                                UpdateStatus::ReadyToRestart => rsx! {
+                                    div { class: "p-3 bg-emerald-950/30 border border-emerald-500/30 rounded-lg text-emerald-400 text-xs flex items-center gap-2",
+                                        span { "✅" }
+                                        span { "更新已安裝成功！點擊下方按鈕重啟以生效。" }
+                                    }
+                                },
+                                UpdateStatus::Failed(err) => rsx! {
+                                    div { class: "p-3 bg-rose-950/30 border border-rose-500/30 rounded-lg text-rose-400 text-xs flex flex-col gap-1",
+                                        span { class: "font-semibold", "更新失敗：" }
+                                        span { class: "font-mono text-[11px]", "{err}" }
+                                    }
+                                }
+                            }
+
+                            // Actions
+                            div { class: "flex items-center justify-end gap-3 pt-3 border-t border-slate-800",
+                                if *update_status.read() == UpdateStatus::ReadyToRestart {
+                                    button {
+                                        class: "px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer",
+                                        onclick: move |_| {
+                                            let _ = UpdaterService::restart_app();
+                                        },
+                                        "立即重啟應用程式"
+                                    }
+                                } else if *update_status.read() == UpdateStatus::Idle || matches!(*update_status.read(), UpdateStatus::Failed(_)) {
+                                    button {
+                                        class: "px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg transition-colors cursor-pointer",
+                                        onclick: move |_| show_update_modal.set(false),
+                                        "稍後再說"
+                                    }
+                                    if let Some(dl_url) = update_info().download_url {
+                                        button {
+                                            class: "px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer",
+                                            onclick: {
+                                                let dl_url = dl_url.clone();
+                                                move |_| {
+                                                    let dl_url = dl_url.clone();
+                                                    update_status.set(UpdateStatus::Downloading { progress: 0 });
+                                                    spawn(async move {
+                                                        update_status.set(UpdateStatus::Extracting);
+                                                        match UpdaterService::download_and_install_update(&dl_url).await {
+                                                            Ok(()) => {
+                                                                update_status.set(UpdateStatus::ReadyToRestart);
+                                                            }
+                                                            Err(e) => {
+                                                                update_status.set(UpdateStatus::Failed(format!("{:#}", e)));
+                                                            }
+                                                        }
+                                                    });
+                                                }
+                                            },
+                                            "開始自動更新 (Self-Update)"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
