@@ -13,7 +13,6 @@ pub fn HistoryView() -> Element {
     let mut receipts = use_signal(Vec::<Receipt>::new);
     let mut total_count = use_signal(|| 0i64);
     let mut current_page = use_signal(|| 1i64);
-    let mut reload_trigger = use_signal(|| 0i64);
     let page_size = 10i64;
 
     // Filter signals
@@ -38,35 +37,37 @@ pub fn HistoryView() -> Element {
     // Delete confirmation modal state
     let mut receipt_to_delete = use_signal(|| Option::<Receipt>::None);
 
-    // Reactive data fetcher
-    use_effect({
+    // Deterministic data fetcher
+    let fetch_data = {
         let db = db.clone();
-        move || {
-            let _ = reload_trigger();
-            let kw = keyword();
-            let ps = payment_status_filter();
-            let sd = start_date();
-            let ed = end_date();
-            let page = current_page();
+        move |target_page: i64, kw: String, ps: String, sd: String, ed: String| {
             let db = db.clone();
-
             spawn(async move {
                 let filter = ReceiptFilter {
                     keyword: Some(kw).filter(|s| !s.trim().is_empty()),
                     payment_status: Some(ps),
                     start_date: Some(sd).filter(|s| !s.trim().is_empty()),
                     end_date: Some(ed).filter(|s| !s.trim().is_empty()),
-                    page,
+                    page: target_page,
                     page_size,
                 };
                 if let Ok((list, total)) = db.get_confirmed_receipts(&filter).await {
                     receipts.set(list);
                     total_count.set(total);
+                    current_page.set(target_page);
                 }
                 if let Ok(terms) = db.get_payment_terms().await {
                     payment_terms.set(terms);
                 }
             });
+        }
+    };
+
+    // Load initial data on mount
+    use_effect({
+        let fetch_data = fetch_data.clone();
+        move || {
+            fetch_data(1, keyword(), payment_status_filter(), start_date(), end_date());
         }
     });
 
@@ -95,10 +96,38 @@ pub fn HistoryView() -> Element {
                     span { class: "text-slate-400 text-sm", "🔍" }
                     input {
                         r#type: "text",
-                        placeholder: "搜尋工單號或施工人員...",
+                        placeholder: "搜尋工單號 (如 10001, NO.10001) 或施工人員...",
                         value: "{keyword}",
-                        oninput: move |e| keyword.set(e.value()),
+                        oninput: {
+                            let fetch_data = fetch_data.clone();
+                            move |e: FormEvent| {
+                                let val = e.value();
+                                keyword.set(val.clone());
+                                fetch_data(1, val, payment_status_filter(), start_date(), end_date());
+                            }
+                        },
+                        onkeydown: {
+                            let fetch_data = fetch_data.clone();
+                            move |e: KeyboardEvent| {
+                                if e.key() == Key::Enter {
+                                    fetch_data(1, keyword(), payment_status_filter(), start_date(), end_date());
+                                }
+                            }
+                        },
                         class: "w-full bg-transparent text-sm text-slate-100 placeholder-slate-500 outline-none"
+                    }
+                    if !keyword().is_empty() {
+                        button {
+                            class: "text-slate-500 hover:text-slate-300 text-xs px-1 cursor-pointer",
+                            onclick: {
+                                let fetch_data = fetch_data.clone();
+                                move |_| {
+                                    keyword.set(String::new());
+                                    fetch_data(1, String::new(), payment_status_filter(), start_date(), end_date());
+                                }
+                            },
+                            "✕"
+                        }
                     }
                 }
 
@@ -108,13 +137,17 @@ pub fn HistoryView() -> Element {
                     select {
                         class: "bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 outline-none cursor-pointer",
                         value: "{payment_status_filter}",
-                        onchange: move |e| {
-                            payment_status_filter.set(e.value());
-                            current_page.set(1);
+                        onchange: {
+                            let fetch_data = fetch_data.clone();
+                            move |e: FormEvent| {
+                                let val = e.value();
+                                payment_status_filter.set(val.clone());
+                                fetch_data(1, keyword(), val, start_date(), end_date());
+                            }
                         },
-                        option { value: "all", "全部狀態" }
-                        option { value: "unpaid", "未收費" }
-                        option { value: "paid", "已收費" }
+                        option { value: "all", selected: payment_status_filter() == "all", "全部狀態" }
+                        option { value: "unpaid", selected: payment_status_filter() == "unpaid", "未收費" }
+                        option { value: "paid", selected: payment_status_filter() == "paid", "已收費" }
                     }
                 }
 
@@ -124,9 +157,21 @@ pub fn HistoryView() -> Element {
                     input {
                         r#type: "date",
                         value: "{start_date}",
-                        oninput: move |e| {
-                            start_date.set(e.value());
-                            current_page.set(1);
+                        onchange: {
+                            let fetch_data = fetch_data.clone();
+                            move |e: FormEvent| {
+                                let val = e.value();
+                                start_date.set(val.clone());
+                                fetch_data(1, keyword(), payment_status_filter(), val, end_date());
+                            }
+                        },
+                        oninput: {
+                            let fetch_data = fetch_data.clone();
+                            move |e: FormEvent| {
+                                let val = e.value();
+                                start_date.set(val.clone());
+                                fetch_data(1, keyword(), payment_status_filter(), val, end_date());
+                            }
                         },
                         class: "bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 outline-none font-mono"
                     }
@@ -134,9 +179,21 @@ pub fn HistoryView() -> Element {
                     input {
                         r#type: "date",
                         value: "{end_date}",
-                        oninput: move |e| {
-                            end_date.set(e.value());
-                            current_page.set(1);
+                        onchange: {
+                            let fetch_data = fetch_data.clone();
+                            move |e: FormEvent| {
+                                let val = e.value();
+                                end_date.set(val.clone());
+                                fetch_data(1, keyword(), payment_status_filter(), start_date(), val);
+                            }
+                        },
+                        oninput: {
+                            let fetch_data = fetch_data.clone();
+                            move |e: FormEvent| {
+                                let val = e.value();
+                                end_date.set(val.clone());
+                                fetch_data(1, keyword(), payment_status_filter(), start_date(), val);
+                            }
                         },
                         class: "bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 outline-none font-mono"
                     }
@@ -146,21 +203,25 @@ pub fn HistoryView() -> Element {
                 div { class: "flex items-center gap-2 ml-auto",
                     button {
                         class: "px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer",
-                        onclick: move |_| {
-                            current_page.set(1);
-                            *reload_trigger.write() += 1;
+                        onclick: {
+                            let fetch_data = fetch_data.clone();
+                            move |_| {
+                                fetch_data(1, keyword(), payment_status_filter(), start_date(), end_date());
+                            }
                         },
                         "搜尋"
                     }
                     button {
                         class: "px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg transition-colors cursor-pointer",
-                        onclick: move |_| {
-                            keyword.set(String::new());
-                            payment_status_filter.set("all".to_string());
-                            start_date.set(String::new());
-                            end_date.set(String::new());
-                            current_page.set(1);
-                            *reload_trigger.write() += 1;
+                        onclick: {
+                            let fetch_data = fetch_data.clone();
+                            move |_| {
+                                keyword.set(String::new());
+                                payment_status_filter.set("all".to_string());
+                                start_date.set(String::new());
+                                end_date.set(String::new());
+                                fetch_data(1, String::new(), "all".to_string(), String::new(), String::new());
+                            }
                         },
                         "重設"
                     }
@@ -262,13 +323,15 @@ pub fn HistoryView() -> Element {
                                                         onclick: {
                                                             let db = db.clone();
                                                             let item = receipt_for_toggle.clone();
+                                                            let fetch_data = fetch_data.clone();
                                                             move |_| {
                                                                 let db = db.clone();
                                                                 let id = item.id;
+                                                                let fetch_data = fetch_data.clone();
                                                                 spawn(async move {
                                                                     let _ = db.set_payment_status(id, "paid").await;
-                                                                    *reload_trigger.write() += 1;
                                                                     refresh_badges.trigger();
+                                                                    fetch_data(current_page(), keyword(), payment_status_filter(), start_date(), end_date());
                                                                 });
                                                             }
                                                         },
@@ -281,13 +344,15 @@ pub fn HistoryView() -> Element {
                                                         onclick: {
                                                             let db = db.clone();
                                                             let item = receipt_for_toggle.clone();
+                                                            let fetch_data = fetch_data.clone();
                                                             move |_| {
                                                                 let db = db.clone();
                                                                 let id = item.id;
+                                                                let fetch_data = fetch_data.clone();
                                                                 spawn(async move {
                                                                     let _ = db.set_payment_status(id, "unpaid").await;
-                                                                    *reload_trigger.write() += 1;
                                                                     refresh_badges.trigger();
+                                                                    fetch_data(current_page(), keyword(), payment_status_filter(), start_date(), end_date());
                                                                 });
                                                             }
                                                         },
@@ -347,9 +412,12 @@ pub fn HistoryView() -> Element {
                         button {
                             disabled: current_page() <= 1,
                             class: "px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer",
-                            onclick: move |_| {
-                                if current_page() > 1 {
-                                    current_page.set(current_page() - 1);
+                            onclick: {
+                                let fetch_data = fetch_data.clone();
+                                move |_| {
+                                    if current_page() > 1 {
+                                        fetch_data(current_page() - 1, keyword(), payment_status_filter(), start_date(), end_date());
+                                    }
                                 }
                             },
                             "上一頁"
@@ -360,9 +428,12 @@ pub fn HistoryView() -> Element {
                         button {
                             disabled: current_page() >= total_pages,
                             class: "px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer",
-                            onclick: move |_| {
-                                if current_page() < total_pages {
-                                    current_page.set(current_page() + 1);
+                            onclick: {
+                                let fetch_data = fetch_data.clone();
+                                move |_| {
+                                    if current_page() < total_pages {
+                                        fetch_data(current_page() + 1, keyword(), payment_status_filter(), start_date(), end_date());
+                                    }
                                 }
                             },
                             "下一頁"
@@ -477,6 +548,7 @@ pub fn HistoryView() -> Element {
                                     let r_err = r.error_message.clone();
                                     let r_ca = r.created_at.clone();
                                     let r_ua = r.updated_at.clone();
+                                    let fetch_data = fetch_data.clone();
                                     move |_| {
                                         let db = db.clone();
                                         let parsed_no = crate::utils::normalize_receipt_no(&modal_no());
@@ -498,11 +570,12 @@ pub fn HistoryView() -> Element {
                                             updated_at: r_ua.clone(),
                                         };
 
+                                        let fetch_data = fetch_data.clone();
                                         spawn(async move {
                                             let _ = db.update_receipt(&r_save).await;
                                             selected_receipt.set(None);
-                                            *reload_trigger.write() += 1;
                                             refresh_badges.trigger();
+                                            fetch_data(current_page(), keyword(), payment_status_filter(), start_date(), end_date());
                                         });
                                     }
                                 },
@@ -573,13 +646,15 @@ pub fn HistoryView() -> Element {
                                 onclick: {
                                     let db = db.clone();
                                     let id = item.id;
+                                    let fetch_data = fetch_data.clone();
                                     move |_| {
                                         let db = db.clone();
                                         receipt_to_delete.set(None);
+                                        let fetch_data = fetch_data.clone();
                                         spawn(async move {
                                             let _ = db.delete_receipt(id).await;
-                                            *reload_trigger.write() += 1;
                                             refresh_badges.trigger();
+                                            fetch_data(current_page(), keyword(), payment_status_filter(), start_date(), end_date());
                                         });
                                     }
                                 },

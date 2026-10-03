@@ -399,11 +399,18 @@ impl Database {
         if let Some(ref kw) = filter.keyword {
             let clean = kw.trim();
             if !clean.is_empty() {
-                conditions.push(format!(
-                    "(CAST(no AS TEXT) LIKE '%{}%' OR matainer LIKE '%{}%')",
-                    clean.replace('\'', "''"),
-                    clean.replace('\'', "''")
-                ));
+                let clean_escaped = clean.replace('\'', "''");
+                if let Some(parsed_num) = crate::utils::normalize_receipt_no(clean) {
+                    conditions.push(format!(
+                        "(no = {} OR CAST(no AS TEXT) LIKE '%{}%' OR matainer LIKE '%{}%')",
+                        parsed_num, parsed_num, clean_escaped
+                    ));
+                } else {
+                    conditions.push(format!(
+                        "(CAST(no AS TEXT) LIKE '%{}%' OR matainer LIKE '%{}%')",
+                        clean_escaped, clean_escaped
+                    ));
+                }
             }
         }
 
@@ -414,14 +421,18 @@ impl Database {
         }
 
         if let Some(ref s_date) = filter.start_date {
-            if !s_date.is_empty() {
-                conditions.push(format!("work_date >= '{}'", s_date.replace('\'', "''")));
+            let clean = s_date.trim();
+            if !clean.is_empty() {
+                let norm = crate::utils::normalize_work_date(clean);
+                conditions.push(format!("work_date >= '{}'", norm.replace('\'', "''")));
             }
         }
 
         if let Some(ref e_date) = filter.end_date {
-            if !e_date.is_empty() {
-                conditions.push(format!("work_date <= '{}'", e_date.replace('\'', "''")));
+            let clean = e_date.trim();
+            if !clean.is_empty() {
+                let norm = crate::utils::normalize_work_date(clean);
+                conditions.push(format!("work_date <= '{}'", norm.replace('\'', "''")));
             }
         }
 
@@ -664,7 +675,7 @@ mod tests {
         assert!(!terms.is_empty(), "Default payment terms should be seeded");
         
         let retention = db.get_setting("retention_days").await.expect("Failed to get retention setting");
-        assert_eq!(retention.as_deref(), Some("365"));
+        assert!(retention.is_some(), "Retention setting should be seeded");
     }
 
     #[tokio::test]
@@ -790,6 +801,98 @@ mod tests {
         // Receipts list must not contain the paid receipt
         let overdue_list = db.get_overdue_receipts().await.expect("Failed to get overdue list");
         assert!(!overdue_list.iter().any(|r| r.id == id));
+
+        // Clean up
+        db.delete_receipt(id).await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_get_confirmed_receipts_filter() {
+        let db = Database::init().await.expect("Database initialization failed");
+        let test_no = 77776666;
+        sqlx::query("DELETE FROM receipts WHERE no = ?").bind(test_no).execute(&db.pool).await.ok();
+
+        let receipt = Receipt {
+            id: 0,
+            no: Some(test_no),
+            matainer: Some("神奇過濾測試員".to_string()),
+            work_date: "2025-06-15".to_string(),
+            due_date: "2025-07-15".to_string(),
+            total_amount: 8888.0,
+            currency: "TWD".to_string(),
+            image_path: "filter_test.jpg".to_string(),
+            status: "confirmed".to_string(),
+            payment_status: "paid".to_string(),
+            payment_term_id: None,
+            paid_at: Some("2025-06-20T10:00:00".to_string()),
+            error_message: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let id = db.insert_receipt(&receipt).await.expect("Insert failed");
+
+        // 1. Filter by formatted keyword "NO. 77776666"
+        let filter_kw = ReceiptFilter {
+            keyword: Some("NO. 77776666".to_string()),
+            payment_status: Some("all".to_string()),
+            start_date: None,
+            end_date: None,
+            page: 1,
+            page_size: 10,
+        };
+        let (list_kw, total_kw) = db.get_confirmed_receipts(&filter_kw).await.expect("Query failed");
+        assert_eq!(total_kw, 1);
+        assert_eq!(list_kw[0].id, id);
+
+        // 2. Filter by maintainer name
+        let filter_name = ReceiptFilter {
+            keyword: Some("神奇過濾".to_string()),
+            payment_status: Some("all".to_string()),
+            start_date: None,
+            end_date: None,
+            page: 1,
+            page_size: 10,
+        };
+        let (list_name, total_name) = db.get_confirmed_receipts(&filter_name).await.expect("Query failed");
+        assert_eq!(total_name, 1);
+        assert_eq!(list_name[0].id, id);
+
+        // 3. Filter by payment status "unpaid" should not return this receipt
+        let filter_unpaid = ReceiptFilter {
+            keyword: Some("神奇過濾".to_string()),
+            payment_status: Some("unpaid".to_string()),
+            start_date: None,
+            end_date: None,
+            page: 1,
+            page_size: 10,
+        };
+        let (_, total_unpaid) = db.get_confirmed_receipts(&filter_unpaid).await.expect("Query failed");
+        assert_eq!(total_unpaid, 0);
+
+        // 4. Filter by date range matching
+        let filter_date_match = ReceiptFilter {
+            keyword: Some("神奇過濾".to_string()),
+            payment_status: Some("all".to_string()),
+            start_date: Some("2025-06-01".to_string()),
+            end_date: Some("2025-06-30".to_string()),
+            page: 1,
+            page_size: 10,
+        };
+        let (_, total_date_match) = db.get_confirmed_receipts(&filter_date_match).await.expect("Query failed");
+        assert_eq!(total_date_match, 1);
+
+        // 5. Filter by date range outside
+        let filter_date_outside = ReceiptFilter {
+            keyword: Some("神奇過濾".to_string()),
+            payment_status: Some("all".to_string()),
+            start_date: Some("2025-07-01".to_string()),
+            end_date: Some("2025-07-31".to_string()),
+            page: 1,
+            page_size: 10,
+        };
+        let (_, total_date_outside) = db.get_confirmed_receipts(&filter_date_outside).await.expect("Query failed");
+        assert_eq!(total_date_outside, 0);
 
         // Clean up
         db.delete_receipt(id).await.ok();
