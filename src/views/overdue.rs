@@ -5,10 +5,12 @@ use crate::db::Database;
 use crate::models::{OverdueKpi, Receipt};
 use crate::services::storage::StorageService;
 use crate::utils::calculate_overdue_days;
+use crate::views::layout::RefreshBadges;
 
 #[component]
 pub fn OverdueView() -> Element {
     let db = use_context::<Database>();
+    let refresh_badges = use_context::<RefreshBadges>();
     let mut overdue_list = use_signal(Vec::<Receipt>::new);
     let mut kpi = use_signal(OverdueKpi::default);
     let mut selected_ids = use_signal(HashSet::<i64>::new);
@@ -53,6 +55,7 @@ pub fn OverdueView() -> Element {
                     let _ = db.set_payment_status(id, "paid").await;
                 }
                 reload();
+                refresh_badges.trigger();
             });
         }
     };
@@ -239,6 +242,7 @@ pub fn OverdueView() -> Element {
                                                             spawn(async move {
                                                                 let _ = db.set_payment_status(id, "paid").await;
                                                                 reload();
+                                                                refresh_badges.trigger();
                                                             });
                                                         }
                                                     },

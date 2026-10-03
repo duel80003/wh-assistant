@@ -7,10 +7,12 @@ use crate::services::ollama::OllamaService;
 use crate::services::storage::StorageService;
 use crate::services::watcher::WatcherService;
 use crate::utils::{calculate_due_date, normalize_work_date};
+use crate::views::layout::RefreshBadges;
 
 #[component]
 pub fn ReviewView() -> Element {
     let db = use_context::<Database>();
+    let refresh_badges = use_context::<RefreshBadges>();
     let mut receipts = use_signal(Vec::<Receipt>::new);
     let mut current_idx = use_signal(|| 0usize);
     let mut payment_terms = use_signal(Vec::<PaymentTerm>::new);
@@ -103,6 +105,7 @@ pub fn ReviewView() -> Element {
                         Ok(_) => {
                             status_message.set(Some(("工單圖片匯入並辨識完成！".to_string(), false)));
                             reload();
+                            refresh_badges.trigger();
                         }
                         Err(e) => {
                             status_message.set(Some((format!("匯入失敗: {:#}", e), true)));
@@ -142,6 +145,7 @@ pub fn ReviewView() -> Element {
                         Ok(_) => {
                             status_message.set(Some(("工單已確認並成功歸檔存入資料庫！".to_string(), false)));
                             reload();
+                            refresh_badges.trigger();
                         }
                         Err(e) => {
                             status_message.set(Some((format!("儲存工單失敗: {:#}", e), true)));
@@ -166,6 +170,7 @@ pub fn ReviewView() -> Element {
                     if let Ok(_) = db.delete_receipt(id).await {
                         status_message.set(Some(("單據及圖片檔案已成功刪除。".to_string(), false)));
                         reload();
+                        refresh_badges.trigger();
                     }
                 });
             }
@@ -563,6 +568,7 @@ pub fn ReviewView() -> Element {
                                                 Ok(_) => {
                                                     status_message.set(Some(("工單圖片匯入並辨識完成！".to_string(), false)));
                                                     reload();
+                                                    refresh_badges.trigger();
                                                 }
                                                 Err(e) => {
                                                     status_message.set(Some((format!("匯入失敗: {:#}", e), true)));

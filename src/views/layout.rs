@@ -3,30 +3,77 @@ use crate::Route;
 use crate::db::Database;
 use crate::services::ollama::OllamaService;
 
+#[derive(Clone, Copy)]
+pub struct RefreshBadges(pub Signal<u64>);
+
+impl RefreshBadges {
+    pub fn trigger(mut self) {
+        *self.0.write() += 1;
+    }
+}
+
 #[component]
 pub fn AppShell() -> Element {
     let db = use_context::<Database>();
     let mut unconfirmed_count = use_signal(|| 0i64);
     let mut overdue_count = use_signal(|| 0i64);
     let mut ollama_online = use_signal(|| false);
+    let refresh_trigger = use_signal(|| 0u64);
 
-    // Refresh badge counts and ollama status periodically
-    use_effect(move || {
-        let db = db.clone();
-        spawn(async move {
-            if let Ok(count) = db.get_unconfirmed_count().await {
-                unconfirmed_count.set(count);
-            }
-            if let Ok(kpi) = db.get_overdue_kpi().await {
-                overdue_count.set(kpi.total_count);
-            }
-            let url = db.get_setting("ollama_url").await.unwrap_or(None).unwrap_or_else(|| "http://localhost:11434".to_string());
-            let online = OllamaService::test_connection(&url).await.is_ok();
-            ollama_online.set(online);
-        });
-    });
+    use_context_provider(|| RefreshBadges(refresh_trigger));
 
     let current_route = use_route::<Route>();
+    let mut active_route = use_signal(|| current_route.clone());
+    if *active_route.read() != current_route {
+        active_route.set(current_route.clone());
+    }
+
+    // Refresh badge counts whenever refresh_trigger or route changes
+    use_effect({
+        let db = db.clone();
+        move || {
+            let _ = refresh_trigger();
+            let _ = active_route();
+            let db = db.clone();
+            spawn(async move {
+                if let Ok(count) = db.get_unconfirmed_count().await {
+                    unconfirmed_count.set(count);
+                }
+                if let Ok(kpi) = db.get_overdue_kpi().await {
+                    overdue_count.set(kpi.total_count);
+                }
+                let url = db.get_setting("ollama_url").await.unwrap_or(None).unwrap_or_else(|| "http://localhost:11434".to_string());
+                let online = OllamaService::test_connection(&url).await.is_ok();
+                ollama_online.set(online);
+            });
+        }
+    });
+
+    // Background periodic refresh (every 4 seconds) to keep badges in sync with filesystem watcher
+    use_hook({
+        let db = db.clone();
+        move || {
+            let db = db.clone();
+            spawn(async move {
+                let mut ticker = 0u32;
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                    if let Ok(count) = db.get_unconfirmed_count().await {
+                        unconfirmed_count.set(count);
+                    }
+                    if let Ok(kpi) = db.get_overdue_kpi().await {
+                        overdue_count.set(kpi.total_count);
+                    }
+                    ticker += 1;
+                    if ticker % 3 == 0 {
+                        let url = db.get_setting("ollama_url").await.unwrap_or(None).unwrap_or_else(|| "http://localhost:11434".to_string());
+                        let online = OllamaService::test_connection(&url).await.is_ok();
+                        ollama_online.set(online);
+                    }
+                }
+            });
+        }
+    });
 
     rsx! {
         div { class: "flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans",

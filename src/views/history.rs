@@ -4,10 +4,12 @@ use crate::db::Database;
 use crate::models::{PaymentTerm, Receipt, ReceiptFilter};
 use crate::services::storage::StorageService;
 use crate::utils::{calculate_due_date, normalize_work_date};
+use crate::views::layout::RefreshBadges;
 
 #[component]
 pub fn HistoryView() -> Element {
     let db = use_context::<Database>();
+    let refresh_badges = use_context::<RefreshBadges>();
     let mut receipts = use_signal(Vec::<Receipt>::new);
     let mut total_count = use_signal(|| 0i64);
     let mut current_page = use_signal(|| 1i64);
@@ -266,13 +268,14 @@ pub fn HistoryView() -> Element {
                                                                 spawn(async move {
                                                                     let _ = db.set_payment_status(id, "paid").await;
                                                                     *reload_trigger.write() += 1;
+                                                                    refresh_badges.trigger();
                                                                 });
                                                             }
                                                         },
                                                         "標記已收"
                                                     }
                                                 } else {
-                                                    button {
+                                                     button {
                                                         class: "px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700 rounded text-xs transition-colors cursor-pointer",
                                                         title: "還原為未收款狀態",
                                                         onclick: {
@@ -284,6 +287,7 @@ pub fn HistoryView() -> Element {
                                                                 spawn(async move {
                                                                     let _ = db.set_payment_status(id, "unpaid").await;
                                                                     *reload_trigger.write() += 1;
+                                                                    refresh_badges.trigger();
                                                                 });
                                                             }
                                                         },
@@ -498,6 +502,7 @@ pub fn HistoryView() -> Element {
                                             let _ = db.update_receipt(&r_save).await;
                                             selected_receipt.set(None);
                                             *reload_trigger.write() += 1;
+                                            refresh_badges.trigger();
                                         });
                                     }
                                 },
@@ -574,6 +579,7 @@ pub fn HistoryView() -> Element {
                                         spawn(async move {
                                             let _ = db.delete_receipt(id).await;
                                             *reload_trigger.write() += 1;
+                                            refresh_badges.trigger();
                                         });
                                     }
                                 },

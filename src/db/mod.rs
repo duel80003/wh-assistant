@@ -748,4 +748,51 @@ mod tests {
         // Clean up
         db.delete_receipt(id1).await.ok();
     }
+
+    #[tokio::test]
+    async fn test_overdue_payment_status_update() {
+        let db = Database::init().await.expect("Database initialization failed");
+        let test_no = 99998888;
+        sqlx::query("DELETE FROM receipts WHERE no = ?").bind(test_no).execute(&db.pool).await.ok();
+
+        let initial_kpi = db.get_overdue_kpi().await.expect("Failed to get KPI");
+
+        let overdue_receipt = Receipt {
+            id: 0,
+            no: Some(test_no),
+            matainer: Some("逾期催收測試員".to_string()),
+            work_date: "2020-01-01".to_string(),
+            due_date: "2020-02-01".to_string(), // Clearly overdue
+            total_amount: 5500.0,
+            currency: "TWD".to_string(),
+            image_path: "test_overdue.jpg".to_string(),
+            status: "confirmed".to_string(),
+            payment_status: "unpaid".to_string(),
+            payment_term_id: None,
+            paid_at: None,
+            error_message: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let id = db.insert_receipt(&overdue_receipt).await.expect("Insert failed");
+
+        let kpi_with_overdue = db.get_overdue_kpi().await.expect("Failed to get KPI");
+        assert_eq!(kpi_with_overdue.total_count, initial_kpi.total_count + 1);
+
+        // Mark as paid
+        db.set_payment_status(id, "paid").await.expect("Failed to set paid");
+
+        // KPI must reflect decrease immediately
+        let kpi_after_paid = db.get_overdue_kpi().await.expect("Failed to get KPI");
+        assert_eq!(kpi_after_paid.total_count, initial_kpi.total_count);
+
+        // Receipts list must not contain the paid receipt
+        let overdue_list = db.get_overdue_receipts().await.expect("Failed to get overdue list");
+        assert!(!overdue_list.iter().any(|r| r.id == id));
+
+        // Clean up
+        db.delete_receipt(id).await.ok();
+    }
 }
+
