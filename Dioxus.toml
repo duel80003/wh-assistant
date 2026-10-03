@@ -1,9 +1,15 @@
 [application]
+name = "WHassistant"
+default_platform = "desktop"
+
+[bundle]
+identifier = "com.whassistant.app"
+publisher = "WHassistant"
+icon = ["assets/mac.icns", "assets/win.ico", "assets/favicon.ico"]
 
 [web.app]
-
 # HTML title tag content
-title = "wh-assistant"
+title = "WHassistant - 工單與收據管理系統"
 
 # include `assets` in web platform
 [web.resource]
