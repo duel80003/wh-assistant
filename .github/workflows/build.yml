@@ -68,7 +68,7 @@ jobs:
       - name: Build & Bundle Desktop App with Dioxus
         shell: bash
         run: |
-          dx bundle --platform windows --release || dx build --desktop --release
+          dx bundle --desktop --package-types msi --release || dx bundle --platform windows --release || dx build --desktop --release
 
       # -------------------------------------------------------------
       # Packaging for Windows 11/10 (.zip)
@@ -101,11 +101,10 @@ jobs:
           ls -la dist/WHassistant-Windows-x64/assets/
 
           # Check for any .msi or installer produced by dx bundle
-          MSI_PATH=$(find target -name "*.msi" | head -n 1)
-          if [ -n "$MSI_PATH" ]; then
-            echo "Found MSI installer at: $MSI_PATH"
-            cp "$MSI_PATH" dist/
-          fi
+          find target -type f -name "*.msi" | while read -r msi_file; do
+            echo "Found MSI installer at: $msi_file"
+            cp "$msi_file" dist/
+          done
 
           # Create zip archive
           cd dist
