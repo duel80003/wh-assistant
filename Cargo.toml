@@ -28,3 +28,18 @@ default = ["desktop"]
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
+
+[profile.release]
+opt-level = 2
+codegen-units = 16
+lto = false
+panic = "abort"
+strip = true
+
+[profile.desktop-release]
+inherits = "release"
+opt-level = 2
+codegen-units = 16
+lto = false
+panic = "abort"
+strip = true

@@ -2,6 +2,8 @@ name: Build Desktop App (Windows)
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -23,22 +25,28 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
       - name: Setup Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          key: x86_64-pc-windows-msvc
+          shared-key: "windows-x86_64-msvc"
+          cache-on-failure: true
+
+      - name: Configure compiler cache environment
+        shell: bash
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: "npm"
-
-      - name: Install npm dependencies
-        run: npm ci
 
       - name: Compile Tailwind CSS
-        run: npx @tailwindcss/cli -i ./tailwind.css -o ./assets/tailwind.css
+        run: npx --yes @tailwindcss/cli -i ./tailwind.css -o ./assets/tailwind.css
 
       - name: Sync Cargo.toml version with Git Tag
         shell: bash
