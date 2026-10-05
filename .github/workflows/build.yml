@@ -52,13 +52,23 @@ jobs:
             head -n 6 Cargo.toml
           fi
 
+      - name: Add WiX Toolset to PATH
+        shell: bash
+        run: |
+          if [ -d "/c/Program Files (x86)/WiX Toolset v3.11/bin" ]; then
+            echo "Adding WiX Toolset to PATH"
+            echo "/c/Program Files (x86)/WiX Toolset v3.11/bin" >> $GITHUB_PATH
+          fi
+
       - name: Install Dioxus CLI (dx)
         uses: taiki-e/install-action@v2
         with:
           tool: dioxus-cli
 
       - name: Build & Bundle Desktop App with Dioxus
-        run: dx bundle --platform windows --release
+        shell: bash
+        run: |
+          dx bundle --platform windows --release || dx build --desktop --release
 
       # -------------------------------------------------------------
       # Packaging for Windows 11/10 (.zip)
@@ -66,15 +76,29 @@ jobs:
       - name: Package Windows App (.zip)
         shell: bash
         run: |
-          mkdir -p dist/WHassistant-Windows-x64
+          mkdir -p dist/WHassistant-Windows-x64/assets
 
-          # Find and copy built binary
-          EXE_PATH=$(find target -name "w-hassistant.exe" -o -name "WHassistant.exe" | head -n 1)
+          # Find and copy built binary (prefer binary in target/dx if present)
+          EXE_PATH=$(find target -type f \( -name "WHassistant.exe" -o -name "wh-assistant.exe" -o -name "w-hassistant.exe" \) | grep -E "windows|release" | head -n 1)
+          if [ -z "$EXE_PATH" ]; then
+            EXE_PATH=$(find target -type f -name "*.exe" | grep -v "build" | head -n 1)
+          fi
           echo "Found Windows executable at: $EXE_PATH"
           cp "$EXE_PATH" dist/WHassistant-Windows-x64/WHassistant.exe
 
-          # Copy assets alongside executable
-          cp -r assets dist/WHassistant-Windows-x64/
+          # 1. Copy source assets
+          cp -r assets/* dist/WHassistant-Windows-x64/assets/
+
+          # 2. Copy compiled/hashed assets produced by Dioxus Manganis
+          find target -type d -name "assets" | while read -r asset_dir; do
+            echo "Copying compiled assets from: $asset_dir"
+            cp -r "$asset_dir"/* dist/WHassistant-Windows-x64/assets/ 2>/dev/null || true
+          done
+
+          echo "--- Dist Directory Contents ---"
+          ls -la dist/WHassistant-Windows-x64/
+          echo "--- Assets Directory Contents ---"
+          ls -la dist/WHassistant-Windows-x64/assets/
 
           # Check for any .msi or installer produced by dx bundle
           MSI_PATH=$(find target -name "*.msi" | head -n 1)

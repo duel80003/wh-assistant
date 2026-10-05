@@ -41,12 +41,25 @@ fn main() {
     #[cfg(feature = "desktop")]
     {
         use dioxus::desktop::{Config, WindowBuilder};
-        let cfg = Config::new().with_window(
-            WindowBuilder::new()
-                .with_title("WH assistant - 工單與收據管理系統")
-                .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1280.0, 850.0))
-                .with_min_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1050.0, 700.0)),
-        );
+
+        let window_icon = image::load_from_memory(include_bytes!("../assets/win.ico"))
+            .ok()
+            .and_then(|img| {
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                dioxus::desktop::tao::window::Icon::from_rgba(rgba.into_raw(), width, height).ok()
+            });
+
+        let mut window = WindowBuilder::new()
+            .with_title("WH assistant - 工單與收據管理系統")
+            .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1280.0, 850.0))
+            .with_min_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1050.0, 700.0));
+
+        if let Some(icon) = window_icon {
+            window = window.with_window_icon(Some(icon));
+        }
+
+        let cfg = Config::new().with_window(window);
         dioxus::LaunchBuilder::desktop().with_cfg(cfg).launch(App);
     }
 
@@ -102,8 +115,8 @@ fn App() -> Element {
 
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
-        document::Link { rel: "stylesheet", href: MAIN_CSS }
-        document::Link { rel: "stylesheet", href: TAILWIND_CSS }
+        document::Stylesheet { href: MAIN_CSS }
+        document::Stylesheet { href: TAILWIND_CSS }
 
         if let Some(err) = init_error() {
             div { class: "h-screen w-screen flex items-center justify-center bg-slate-950 text-rose-400 p-8 text-center",

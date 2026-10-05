@@ -5,7 +5,11 @@ default_platform = "desktop"
 [bundle]
 identifier = "com.whassistant.app"
 publisher = "WHassistant"
-icon = ["assets/mac.icns", "assets/win.ico", "assets/favicon.ico"]
+icon = ["assets/win.ico", "assets/mac.icns", "assets/favicon.ico"]
+resources = ["assets/*"]
+
+[bundle.windows]
+icon_path = "assets/win.ico"
 
 [web.app]
 # HTML title tag content
